@@ -34,13 +34,27 @@ const possibleDbPaths = [
 const DB_PATH = possibleDbPaths.find(p => fs.existsSync(p)) || path.resolve(__dirname, '../../../inventario.sqlite');
 console.log(`[DB] Usando banco de dados em: ${DB_PATH}`);
 
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL UNCAUGHT EXCEPTION]:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRITICAL UNHANDLED REJECTION]:', reason);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+try {
+  db.pragma('journal_mode = WAL');
+} catch (e) {
+  try { db.pragma('journal_mode = DELETE'); } catch (err) {}
+}
+try {
+  db.pragma('busy_timeout = 5000');
+} catch (e) {}
 
 // Ensure tables & columns
 db.exec(`
@@ -208,7 +222,12 @@ function getLookupMaps() {
   }
 
   // 1. Contract items (4,344 from EMC)
-  const contractItems = db.prepare("SELECT * FROM base_contratual_emc").all();
+  let contractItems = [];
+  try {
+    contractItems = db.prepare("SELECT * FROM base_contratual_emc").all();
+  } catch (err) {
+    console.error('[DB Error] base_contratual_emc:', err.message);
+  }
   const contractByItem = new Map();
   const contractBySerie = new Map();
 
@@ -235,7 +254,12 @@ function getLookupMaps() {
   }
 
   // 2. Form items (1,960 records from employees)
-  const formRows = db.prepare("SELECT id, row_json, status_logistica FROM inventario_rows").all();
+  let formRows = [];
+  try {
+    formRows = db.prepare("SELECT id, row_json, status_logistica FROM inventario_rows").all();
+  } catch (err) {
+    console.error('[DB Error] inventario_rows:', err.message);
+  }
   const formByCode = new Map();
   const parsedFormRows = [];
 
@@ -305,15 +329,20 @@ app.get('/api/dashboard/stats', (req, res) => {
     const contratadosSemFormulario = Math.max(0, totalContratadoEMC - contratadosDeclaradosNoForm);
 
     // Etapa 1: No Galpão (Aguardando Retirada EMC)
-    const galpaoStats = db.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
-        SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
-        SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
-      FROM conferencias_galpao
-      WHERE status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL
-    `).get();
+    let galpaoStats = { total: 0, cpus: 0, monitores: 0, notebooks: 0 };
+    try {
+      galpaoStats = db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
+          SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
+          SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
+        FROM conferencias_galpao
+        WHERE status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL
+      `).get() || {};
+    } catch (e) {
+      console.error('[DB Error] galpaoStats:', e.message);
+    }
 
     const totalAguardandoEMC = galpaoStats.total || 0;
     const cpusGalpao = galpaoStats.cpus || 0;
@@ -321,15 +350,20 @@ app.get('/api/dashboard/stats', (req, res) => {
     const notebooksGalpao = galpaoStats.notebooks || 0;
 
     // Etapa 2: Devolvidos à EMC (Baixados com documento)
-    const devolvidosStats = db.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
-        SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
-        SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
-      FROM conferencias_galpao
-      WHERE status_etapa = 'devolvido_emc'
-    `).get();
+    let devolvidosStats = { total: 0, cpus: 0, monitores: 0, notebooks: 0 };
+    try {
+      devolvidosStats = db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
+          SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
+          SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
+        FROM conferencias_galpao
+        WHERE status_etapa = 'devolvido_emc'
+      `).get() || {};
+    } catch (e) {
+      console.error('[DB Error] devolvidosStats:', e.message);
+    }
 
     const totalDevolvidosEMC = devolvidosStats.total || 0;
     const cpusDevolvidos = devolvidosStats.cpus || 0;
@@ -341,11 +375,16 @@ app.get('/api/dashboard/stats', (req, res) => {
     const totalEmCampo = Math.max(0, totalContratadoEMC - totalConferidos);
 
     // Conciliation status breakdown
-    const conciliationBreakdown = db.prepare(`
-      SELECT status_conciliacao, COUNT(*) as count 
-      FROM conferencias_galpao 
-      GROUP BY status_conciliacao
-    `).all();
+    let conciliationBreakdown = [];
+    try {
+      conciliationBreakdown = db.prepare(`
+        SELECT status_conciliacao, COUNT(*) as count 
+        FROM conferencias_galpao 
+        GROUP BY status_conciliacao
+      `).all() || [];
+    } catch (e) {
+      console.error('[DB Error] conciliationBreakdown:', e.message);
+    }
 
     let totalConformes = 0;
     let totalDeslocados = 0;
@@ -359,22 +398,27 @@ app.get('/api/dashboard/stats', (req, res) => {
     // Secretarias aggregation
     const secMap = new Map();
     for (const r of parsedFormRows) {
-      const sec = (r.data.Secretaria || 'NÃO DEFINIDA').trim().toUpperCase();
+      const sec = (r.data?.Secretaria || 'NÃO DEFINIDA').trim().toUpperCase();
       if (!secMap.has(sec)) {
         secMap.set(sec, { secretaria: sec, previsto: 0, noGalpao: 0, devolvidoEMC: 0, excedente: 0, faltante: 0 });
       }
       secMap.get(sec).previsto++;
     }
 
-    const checkedBySec = db.prepare(`
-      SELECT 
-        COALESCE(secretaria_prevista, secretaria_coletada) as sec,
-        status_conciliacao,
-        status_etapa,
-        COUNT(*) as count
-      FROM conferencias_galpao
-      GROUP BY sec, status_conciliacao, status_etapa
-    `).all();
+    let checkedBySec = [];
+    try {
+      checkedBySec = db.prepare(`
+        SELECT 
+          COALESCE(secretaria_prevista, secretaria_coletada) as sec,
+          status_conciliacao,
+          status_etapa,
+          COUNT(*) as count
+        FROM conferencias_galpao
+        GROUP BY sec, status_conciliacao, status_etapa
+      `).all() || [];
+    } catch (e) {
+      console.error('[DB Error] checkedBySec:', e.message);
+    }
 
     for (const item of checkedBySec) {
       const secName = (item.sec || 'NÃO DEFINIDA').trim().toUpperCase();
@@ -408,17 +452,31 @@ app.get('/api/dashboard/stats', (req, res) => {
       else contractTypeCounts.outros++;
     }
 
-    const lotesList = db.prepare("SELECT * FROM lotes_romaneio_emc ORDER BY id DESC LIMIT 5").all();
-    const returnsByDoc = db.prepare(`
-      SELECT comprovante_baixa_emc, tipo_equipamento, count(1) as count, min(data_hora_baixa_emc) as data
-      FROM conferencias_galpao
-      WHERE status_etapa = 'devolvido_emc'
-      GROUP BY comprovante_baixa_emc, tipo_equipamento
-      ORDER BY data DESC
-    `).all();
+    let lotesList = [];
+    try {
+      lotesList = db.prepare("SELECT * FROM lotes_romaneio_emc ORDER BY id DESC LIMIT 5").all() || [];
+    } catch (e) {}
 
-    const recentScans = db.prepare("SELECT * FROM conferencias_galpao ORDER BY id DESC LIMIT 10").all();
-    const totalRomaneios = db.prepare("SELECT count(1) as c FROM lotes_romaneio_emc").get().c;
+    let returnsByDoc = [];
+    try {
+      returnsByDoc = db.prepare(`
+        SELECT comprovante_baixa_emc, tipo_equipamento, count(1) as count, min(data_hora_baixa_emc) as data
+        FROM conferencias_galpao
+        WHERE status_etapa = 'devolvido_emc'
+        GROUP BY comprovante_baixa_emc, tipo_equipamento
+        ORDER BY data DESC
+      `).all() || [];
+    } catch (e) {}
+
+    let recentScans = [];
+    try {
+      recentScans = db.prepare("SELECT * FROM conferencias_galpao ORDER BY id DESC LIMIT 10").all() || [];
+    } catch (e) {}
+
+    let totalRomaneios = 0;
+    try {
+      totalRomaneios = db.prepare("SELECT count(1) as c FROM lotes_romaneio_emc").get()?.c || 0;
+    } catch (e) {}
 
     res.json({
       success: true,
@@ -1972,9 +2030,37 @@ app.get('/api/romaneios/:id/itens', (req, res) => {
   }
 });
 
-// Health check
+// Health check with DB diagnostics
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
+  let dbStatus = 'unknown';
+  let dbError = null;
+  let tables = [];
+  let counts = {};
+  try {
+    const row = db.prepare("SELECT sqlite_version() as ver").get();
+    tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(t => t.name);
+    dbStatus = `connected (sqlite v${row.ver})`;
+    try { counts.baseContratual = db.prepare("SELECT count(1) as c FROM base_contratual_emc").get()?.c; } catch(e) {}
+    try { counts.inventarioRows = db.prepare("SELECT count(1) as c FROM inventario_rows").get()?.c; } catch(e) {}
+    try { counts.conferenciasGalpao = db.prepare("SELECT count(1) as c FROM conferencias_galpao").get()?.c; } catch(e) {}
+  } catch (err) {
+    dbStatus = 'error';
+    dbError = err.message;
+  }
+
+  res.json({
+    status: 'ok',
+    time: new Date().toISOString(),
+    node: process.version,
+    platform: process.platform,
+    dbPath: DB_PATH,
+    dbFileExists: fs.existsSync(DB_PATH),
+    dbFileSize: fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0,
+    dbStatus,
+    dbError,
+    counts,
+    tables
+  });
 });
 
 // Serve frontend static build
