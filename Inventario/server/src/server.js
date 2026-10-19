@@ -2338,9 +2338,13 @@ app.get('/api/health', (req, res) => {
 
   res.json({
     status: 'ok',
+    version: '2.1.0-ultra-fast-cache',
     time: new Date().toISOString(),
     node: process.version,
     platform: process.platform,
+    cacheWarmed: !!cachedCompiledContrato,
+    contratoCount: cachedCompiledContrato?.list?.length || 0,
+    equipamentosCount: cachedCompiledEquipamentos?.items?.length || 0,
     dbPath: DB_PATH,
     dbFileExists: fs.existsSync(DB_PATH),
     dbFileSize: fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0,
