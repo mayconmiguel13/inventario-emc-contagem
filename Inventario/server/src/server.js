@@ -1617,21 +1617,32 @@ app.post('/api/emc/confirmar-baixa', (req, res) => {
   }
 });
 
-// List items currently in warehouse (Aguardando Retirada)
+// List items currently in warehouse with status filtering and counts
 app.get('/api/galpao/itens', (req, res) => {
   try {
-    const { search = '', tipo = '', page = 1, limit = 50 } = req.query;
-    let query = "SELECT * FROM conferencias_galpao WHERE status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL";
+    const { search = '', tipo = '', status = 'aguardando_retirada_emc', page = 1, limit = 50 } = req.query;
+
+    const countAguardando = db.prepare("SELECT COUNT(*) as c FROM conferencias_galpao WHERE status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL").get().c;
+    const countDevolvidos = db.prepare("SELECT COUNT(*) as c FROM conferencias_galpao WHERE status_etapa = 'devolvido_emc'").get().c;
+    const countTotal = countAguardando + countDevolvidos;
+
+    let query = "SELECT * FROM conferencias_galpao WHERE 1=1";
     const params = [];
+
+    if (status === 'aguardando_retirada_emc') {
+      query += " AND (status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL)";
+    } else if (status === 'devolvido_emc') {
+      query += " AND status_etapa = 'devolvido_emc'";
+    }
 
     if (tipo) {
       query += " AND tipo_equipamento = ?";
       params.push(tipo);
     }
     if (search) {
-      query += " AND (codigo_bipado LIKE ? OR secretaria_prevista LIKE ? OR servidor_previsto LIKE ?)";
+      query += " AND (codigo_bipado LIKE ? OR codigo_normalizado LIKE ? OR secretaria_prevista LIKE ? OR servidor_previsto LIKE ? OR comprovante_baixa_emc LIKE ?)";
       const s = `%${search}%`;
-      params.push(s, s, s);
+      params.push(s, s, s, s, s);
     }
 
     query += " ORDER BY id DESC";
@@ -1645,9 +1656,138 @@ app.get('/api/galpao/itens', (req, res) => {
     res.json({
       success: true,
       total,
+      countAguardando,
+      countDevolvidos,
+      countTotal,
       page: pageNum,
-      totalPages: Math.ceil(total / limitNum),
+      totalPages: Math.ceil(total / limitNum) || 1,
       items
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Give Baixa (mark as devolvido à EMC) for one, multiple or all items in warehouse
+app.post('/api/galpao/dar-baixa-emc', (req, res) => {
+  try {
+    const { ids = [], todos = false, comprovante = '', observacao = '' } = req.body;
+
+    const docNumero = (comprovante && comprovante.trim()) || `BAIXA-GALPAO-${new Date().toISOString().slice(0, 10)}`;
+    const obsTexto = (observacao && observacao.trim()) || 'Devolvido à EMC via Estoque do Galpão';
+
+    let itemsToProcess = [];
+    if (todos) {
+      itemsToProcess = db.prepare("SELECT * FROM conferencias_galpao WHERE status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL").all();
+    } else if (Array.isArray(ids) && ids.length > 0) {
+      const placeholders = ids.map(() => '?').join(',');
+      itemsToProcess = db.prepare(`SELECT * FROM conferencias_galpao WHERE id IN (${placeholders})`).all(...ids);
+    }
+
+    if (itemsToProcess.length === 0) {
+      return res.status(400).json({ success: false, message: 'Nenhum equipamento selecionado para baixa.' });
+    }
+
+    // Insert Romaneio batch record
+    const numRomaneio = `ROM-GALPAO-${Date.now().toString().slice(-6)}`;
+    let cpus = 0, monitores = 0, notes = 0;
+    for (const it of itemsToProcess) {
+      const t = (it.tipo_equipamento || '').toUpperCase();
+      if (t.includes('CPU')) cpus++;
+      else if (t.includes('MONITOR')) monitores++;
+      else if (t.includes('NOTE')) notes++;
+    }
+
+    const lotInsert = db.prepare(`
+      INSERT INTO lotes_romaneio_emc (
+        numero_romaneio,
+        data_fechamento,
+        status,
+        transportadora,
+        responsavel_ti,
+        total_cpus,
+        total_monitores,
+        total_notebooks,
+        total_geral,
+        comprovante_pdf_emc,
+        observacoes
+      ) VALUES (?, datetime('now', 'localtime'), 'devolvido_emc', 'Transportadora EMC', 'Equipe de Inventário Contagem', ?, ?, ?, ?, ?, ?)
+    `).run(numRomaneio, cpus, monitores, notes, itemsToProcess.length, docNumero, obsTexto);
+
+    const loteId = lotInsert.lastInsertRowid;
+
+    const updateWarehouseStmt = db.prepare(`
+      UPDATE conferencias_galpao SET
+        status_etapa = 'devolvido_emc',
+        data_hora_baixa_emc = datetime('now', 'localtime'),
+        comprovante_baixa_emc = ?,
+        tipo_baixa_emc = 'baixa_direta_galpao',
+        lote_romaneio_id = ?,
+        observacao = coalesce(observacao, '') || ' | ' || ?
+      WHERE id = ?
+    `);
+
+    const updateFormStmt = db.prepare("UPDATE inventario_rows SET status_logistica = 'devolvido_emc' WHERE id = ?");
+    const { formByCode } = getLookupMaps();
+
+    const runTx = db.transaction(() => {
+      for (const it of itemsToProcess) {
+        updateWarehouseStmt.run(docNumero, loteId, `Baixa EMC (${docNumero})`, it.id);
+        if (it.inventario_row_id) {
+          updateFormStmt.run(it.inventario_row_id);
+        } else if (it.codigo_normalizado) {
+          const formMatch = formByCode.get(it.codigo_normalizado);
+          if (formMatch) updateFormStmt.run(formMatch.id);
+        }
+      }
+    });
+
+    runTx();
+    invalidateCache();
+
+    res.json({
+      success: true,
+      message: `${itemsToProcess.length} equipamento(s) baixado(s) com sucesso como Devolvido(s) à EMC!`,
+      totalBaixados: itemsToProcess.length,
+      loteId,
+      numeroRomaneio: numRomaneio
+    });
+  } catch (err) {
+    console.error('Error dar-baixa-emc:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Exclude/Delete an item from warehouse (e.g. test bip or scanned by mistake)
+app.post('/api/galpao/excluir-item', (req, res) => {
+  try {
+    const { id, ids } = req.body;
+    const targetIds = ids || (id ? [id] : []);
+    if (!targetIds || targetIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Nenhum ID informado para exclusão.' });
+    }
+
+    const placeholders = targetIds.map(() => '?').join(',');
+    const items = db.prepare(`SELECT * FROM conferencias_galpao WHERE id IN (${placeholders})`).all(...targetIds);
+
+    const deleteStmt = db.prepare("DELETE FROM conferencias_galpao WHERE id = ?");
+    const resetFormStmt = db.prepare("UPDATE inventario_rows SET status_logistica = 'em_campo' WHERE id = ?");
+
+    const runTx = db.transaction(() => {
+      for (const it of items) {
+        deleteStmt.run(it.id);
+        if (it.inventario_row_id) {
+          resetFormStmt.run(it.inventario_row_id);
+        }
+      }
+    });
+
+    runTx();
+    invalidateCache();
+
+    res.json({
+      success: true,
+      message: `${items.length} registro(s) removido(s) com sucesso do galpão!`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
