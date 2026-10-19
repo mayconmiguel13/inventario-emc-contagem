@@ -1235,9 +1235,11 @@ app.post('/api/conciliacao/bipar', (req, res) => {
 
     res.json({
       success: true,
+      jaCadastrado: !!existing,
       data: {
         id: recordId,
         codigo: rawCode,
+        codigoNormalizado: normCode,
         tipo: tipoItem,
         status,
         statusEtapa: 'aguardando_retirada_emc',
