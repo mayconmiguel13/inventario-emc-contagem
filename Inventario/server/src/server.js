@@ -148,74 +148,53 @@ let cachedCompiledEquipamentos = null;
 let cachedDashboardStats = null;
 let cachedAuditoriaData = null;
 
+const EXACT_JUNK_SET = new Set([
+  'NA', 'N/A', 'NT', 'N/T', 'ND', 'SN', 'S/N', 'S/P', 'SIM', 'COMPUTADOR', 'NOTEBOOK', 'NOTBOOK', 'TELEVISÃO', 'TELEVISAO',
+  'X', 'XX', 'XXX', 'XXXX', 'XXXXX', 'XXXXXX', 'X.X.X.', 'X.X.X.X', 'INDEFINIDO'
+]);
+
+const JUNK_PATTERNS = [
+  /N[ÃA]O/i, /NAO/i, /POSSU[IE]/i, /SEI/i, /APLICA/i, /ALICA/i, /XXXX/i,
+  /^NA$/i, /^NT$/i, /^N\/T$/i, /^ND$/i, /SEM\s/i, /NENHUM/i, /DESCONHEC/i, /INFORMA/i,
+  /COMPENSA[ÇC][ÃA]O/i, /SOMENTE\s+NOTEBOOK/i, /AUS[ÊE]NCIA/i, /AUSENCIA/i, /TENHO\s+UM/i,
+  /TENHO\s+DUAS/i, /N[ÃA]O\s+USO/i, /C[ÓO]DIGO\s+DE\s+BARRA/i, /MANUTEN[ÇC][ÃA]O/i,
+  /PARTICULAR/i, /DOA[ÇC][ÃA]O/i, /RECEITA\s+FEDERAL/i, /FAVOR\s+DAR\s+BAIXA/i,
+  /NOTEBOOK\s+PESSOAL/i, /\(31\)/, /RUA\s+RIO/i
+];
+
 function isJunkCodeText(val) {
   if (!val) return true;
   const s = String(val).trim().toUpperCase();
   if (!s || s === '-' || s === '--' || s === '---' || s === 'NULL' || s === '0' || s === '*' || s === '..') return true;
-
-  const exactJunk = new Set([
-    'NA', 'N/A', 'NT', 'N/T', 'ND', 'SN', 'S/N', 'S/P', 'SIM', 'COMPUTADOR', 'NOTEBOOK', 'NOTBOOK', 'TELEVISÃO', 'TELEVISAO',
-    'X', 'XX', 'XXX', 'XXXX', 'XXXXX', 'XXXXXX', 'X.X.X.', 'X.X.X.X', 'INDEFINIDO'
-  ]);
-  if (exactJunk.has(s)) return true;
+  if (EXACT_JUNK_SET.has(s)) return true;
   if (/^X+$/i.test(s) || /^X(\.X)+$/i.test(s)) return true;
-
-  const junkPatterns = [
-    /N[ÃA]O/i,
-    /NAO/i,
-    /POSSU[IE]/i,
-    /SEI/i,
-    /APLICA/i,
-    /ALICA/i,
-    /XXXX/i,
-    /^NA$/i,
-    /^NT$/i,
-    /^N\/T$/i,
-    /^ND$/i,
-    /SEM\s/i,
-    /NENHUM/i,
-    /DESCONHEC/i,
-    /INFORMA/i,
-    /COMPENSA[ÇC][ÃA]O/i,
-    /SOMENTE\s+NOTEBOOK/i,
-    /AUS[ÊE]NCIA/i,
-    /AUSENCIA/i,
-    /TENHO\s+UM/i,
-    /TENHO\s+DUAS/i,
-    /N[ÃA]O\s+USO/i,
-    /C[ÓO]DIGO\s+DE\s+BARRA/i,
-    /MANUTEN[ÇC][ÃA]O/i,
-    /PARTICULAR/i,
-    /DOA[ÇC][ÃA]O/i,
-    /RECEITA\s+FEDERAL/i,
-    /FAVOR\s+DAR\s+BAIXA/i,
-    /NOTEBOOK\s+PESSOAL/i,
-    /\(31\)/,
-    /RUA\s+RIO/i
-  ];
-  return junkPatterns.some(p => p.test(s));
+  return JUNK_PATTERNS.some(p => p.test(s));
 }
+
+const REGEX_PREFIX_CORP = /^(EMC|CMC|EMS|PMC)\s*[-:_.]?\s*/i;
+const REGEX_PREFIX_LABEL = /^(N[º°.]|TAG|PATRIM[ÔO]NIO|C[ÓO]DIGO\s+DE\s+BARRAS?)\s*[-:_.]?\s*/i;
+const REGEX_PREFIX_SIM = /^SIM\s*[-–]\s*N[º°.]?\s*/i;
+const REGEX_PREFIX_MONITOR = /^MONITOR\s*\d*\s*[-–]\s*/i;
+const REGEX_TRAILING_NOTE = /\s*[-–]\s*(EMC|IMOBILIZADO).*$/i;
+const REGEX_PAREN_EMC = /\s*\(\s*EMC\s*\).*$/i;
+const REGEX_THOUSANDS_DOT = /^\d{3}\.\d{3}$/;
+const REGEX_TRAILING_DOT = /\.+$/;
+const REGEX_LEADING_DIGITS = /^(\d{5,8})/;
 
 function cleanAssetCode(raw) {
   if (!raw) return '';
   let s = String(raw).trim();
-  // Remove EMC, CMC, EMS, PMC prefix: "EMC 138933", "CMC 137101", etc.
-  s = s.replace(/^(EMC|CMC|EMS|PMC)\s*[-:_.]?\s*/i, '');
-  // Remove prefixes like "Nº", "N°", "N.", "CODIGO DE BARRA:", "CODIGO DE BARRAS:"
-  s = s.replace(/^(N[º°.]|TAG|PATRIM[ÔO]NIO|C[ÓO]DIGO\s+DE\s+BARRAS?)\s*[-:_.]?\s*/i, '');
-  s = s.replace(/^SIM\s*[-–]\s*N[º°.]?\s*/i, '');
-  s = s.replace(/^MONITOR\s*\d*\s*[-–]\s*/i, '');
-  // Remove trailing notes like "- EMC IMOBILIZADO" or "(EMC)"
-  s = s.replace(/\s*[-–]\s*(EMC|IMOBILIZADO).*$/i, '');
-  s = s.replace(/\s*\(\s*EMC\s*\).*$/i, '');
-  // Thousands dot formatting e.g. 138.158 -> 138158
-  if (/^\d{3}\.\d{3}$/.test(s)) {
+  s = s.replace(REGEX_PREFIX_CORP, '');
+  s = s.replace(REGEX_PREFIX_LABEL, '');
+  s = s.replace(REGEX_PREFIX_SIM, '');
+  s = s.replace(REGEX_PREFIX_MONITOR, '');
+  s = s.replace(REGEX_TRAILING_NOTE, '');
+  s = s.replace(REGEX_PAREN_EMC, '');
+  if (REGEX_THOUSANDS_DOT.test(s)) {
     s = s.replace('.', '');
   }
-  // Trailing dot like 163126.
-  s = s.replace(/\.+$/, '');
-  // If it starts with digits (5 to 8 digits) and has extra notes, extract the code
-  const matchDigits = s.match(/^(\d{5,8})/);
+  s = s.replace(REGEX_TRAILING_DOT, '');
+  const matchDigits = s.match(REGEX_LEADING_DIGITS);
   if (matchDigits) {
     s = matchDigits[1];
   }
@@ -341,397 +320,446 @@ function invalidateCache() {
 function getCompiledContrato() {
   if (cachedCompiledContrato) return cachedCompiledContrato;
 
-  const { contractItems, formByCode } = getLookupMaps();
-  let warehouseRows = [];
   try {
-    warehouseRows = db.prepare("SELECT * FROM conferencias_galpao").all() || [];
-  } catch (e) {
-    console.error('[DB Error] conferencias_galpao in getCompiledContrato:', e.message);
-  }
-
-  const whByCode = new Map();
-  for (const w of warehouseRows) {
-    if (w.codigo_bipado) whByCode.set(String(w.codigo_bipado).trim().toUpperCase(), w);
-    if (w.codigo_normalizado) whByCode.set(String(w.codigo_normalizado).trim().toUpperCase(), w);
-  }
-
-  const matchedWhIds = new Set();
-  const list = contractItems.map(item => {
-    const itUpper = String(item.item || '').trim().toUpperCase();
-    const serUpper = item.n_serie ? String(item.n_serie).trim().toUpperCase() : '';
-    const matchForm = formByCode.get(itUpper) || (serUpper ? formByCode.get(serUpper) : null);
-    const matchWarehouse = whByCode.get(itUpper) || (serUpper ? whByCode.get(serUpper) : null);
-
-    let statusLogistico = 'em_campo';
-    let comprovanteBaixa = null;
-    let dataBaixa = null;
-    let tipoBaixa = null;
-
-    if (matchWarehouse) {
-      matchedWhIds.add(matchWarehouse.id);
-      statusLogistico = matchWarehouse.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao';
-      comprovanteBaixa = matchWarehouse.comprovante_baixa_emc || null;
-      dataBaixa = matchWarehouse.data_hora_baixa_emc || null;
-      tipoBaixa = matchWarehouse.tipo_baixa_emc || null;
+    const { contractItems, formByCode } = getLookupMaps();
+    let warehouseRows = [];
+    try {
+      warehouseRows = db.prepare("SELECT * FROM conferencias_galpao").all() || [];
+    } catch (e) {
+      console.error('[DB Error] conferencias_galpao in getCompiledContrato:', e.message);
     }
 
-    return {
-      id: `contrato_${item.id}`,
-      item: item.item,
-      n_serie: item.n_serie || '-',
-      descricao: item.descricao,
-      tipo_estimado: item.tipo_estimado,
-      nfe_remessa: item.nfe_remessa || '-',
-      software: item.software || '-',
-      valor_mensal: item.valor_mensal || '-',
-      secretariaDeclarada: matchForm ? (matchForm.secretaria || matchForm.data?.Secretaria || null) : null,
-      servidorDeclarado: matchForm ? (matchForm.servidor || matchForm.data?.['Nome completo do servidor'] || null) : null,
-      unidadeDeclarada: matchForm ? (matchForm.unidade || matchForm.data?.['Nome da unidade onde o equipamento está instalado'] || null) : null,
-      declaradoNoForm: !!matchForm,
-      statusLogistico,
-      comprovanteBaixa,
-      dataBaixa,
-      tipoBaixa,
-      origem: 'base_contratual'
+    const whByCode = new Map();
+    for (const w of warehouseRows) {
+      if (w.codigo_bipado) whByCode.set(String(w.codigo_bipado).trim().toUpperCase(), w);
+      if (w.codigo_normalizado) whByCode.set(String(w.codigo_normalizado).trim().toUpperCase(), w);
+    }
+
+    const matchedWhIds = new Set();
+    const list = contractItems.map(item => {
+      const itUpper = String(item.item || '').trim().toUpperCase();
+      const serUpper = item.n_serie ? String(item.n_serie).trim().toUpperCase() : '';
+      const matchForm = formByCode.get(itUpper) || (serUpper ? formByCode.get(serUpper) : null);
+      const matchWarehouse = whByCode.get(itUpper) || (serUpper ? whByCode.get(serUpper) : null);
+
+      let statusLogistico = 'em_campo';
+      let comprovanteBaixa = null;
+      let dataBaixa = null;
+      let tipoBaixa = null;
+
+      if (matchWarehouse) {
+        matchedWhIds.add(matchWarehouse.id);
+        statusLogistico = matchWarehouse.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao';
+        comprovanteBaixa = matchWarehouse.comprovante_baixa_emc || null;
+        dataBaixa = matchWarehouse.data_hora_baixa_emc || null;
+        tipoBaixa = matchWarehouse.tipo_baixa_emc || null;
+      }
+
+      return {
+        id: `contrato_${item.id}`,
+        item: item.item,
+        n_serie: item.n_serie || '-',
+        descricao: item.descricao,
+        tipo_estimado: item.tipo_estimado,
+        nfe_remessa: item.nfe_remessa || '-',
+        software: item.software || '-',
+        valor_mensal: item.valor_mensal || '-',
+        secretariaDeclarada: matchForm ? (matchForm.secretaria || matchForm.data?.Secretaria || null) : null,
+        servidorDeclarado: matchForm ? (matchForm.servidor || matchForm.data?.['Nome completo do servidor'] || null) : null,
+        unidadeDeclarada: matchForm ? (matchForm.unidade || matchForm.data?.['Nome da unidade onde o equipamento está instalado'] || null) : null,
+        declaradoNoForm: !!matchForm,
+        statusLogistico,
+        comprovanteBaixa,
+        dataBaixa,
+        tipoBaixa,
+        origem: 'base_contratual'
+      };
+    });
+
+    for (const w of warehouseRows) {
+      if (!matchedWhIds.has(w.id)) {
+        list.push({
+          id: `galpao_${w.id}`,
+          item: w.codigo_bipado,
+          n_serie: typeof w.observacao === 'string' && w.observacao.includes('Serial:') ? (w.observacao.match(/Serial:\s*([A-Za-z0-9]+)/) || [])[1] || '-' : '-',
+          descricao: `${w.tipo_equipamento} (Ativo Coletado / Devolvido EMC - Contrato 22645)`,
+          tipo_estimado: w.tipo_equipamento,
+          nfe_remessa: w.comprovante_baixa_emc || '-',
+          software: '-',
+          valor_mensal: '-',
+          secretariaDeclarada: (w.secretaria_prevista && w.secretaria_prevista !== 'Não Mapeada') ? w.secretaria_prevista : (w.secretaria_coletada || null),
+          servidorDeclarado: (w.servidor_previsto && w.servidor_previsto !== 'Não Declarado') ? w.servidor_previsto : null,
+          unidadeDeclarada: w.localidade_coletada || null,
+          declaradoNoForm: !!(w.secretaria_prevista && w.secretaria_prevista !== 'Não Mapeada'),
+          statusLogistico: w.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao',
+          comprovanteBaixa: w.comprovante_baixa_emc || null,
+          dataBaixa: w.data_hora_baixa_emc || null,
+          tipoBaixa: w.tipo_baixa_emc || null,
+          origem: 'galpao_conferencia'
+        });
+      }
+    }
+
+    let emCampo = 0, noGalpao = 0, devolvidoEMC = 0, mapeadosForm = 0, semMapeamento = 0;
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i];
+      if (it.statusLogistico === 'em_campo') emCampo++;
+      else if (it.statusLogistico === 'no_galpao') noGalpao++;
+      else if (it.statusLogistico === 'devolvido_emc') devolvidoEMC++;
+      if (it.declaradoNoForm) mapeadosForm++;
+      else semMapeamento++;
+    }
+
+    const kpis = {
+      total: list.length,
+      emCampo,
+      noGalpao,
+      devolvidoEMC,
+      mapeadosForm,
+      semMapeamento
     };
-  });
 
-  for (const w of warehouseRows) {
-    if (!matchedWhIds.has(w.id)) {
-      list.push({
-        id: `galpao_${w.id}`,
-        item: w.codigo_bipado,
-        n_serie: w.observacao && w.observacao.includes('Serial:') ? (w.observacao.match(/Serial:\s*([A-Za-z0-9]+)/) || [])[1] || '-' : '-',
-        descricao: `${w.tipo_equipamento} (Ativo Coletado / Devolvido EMC - Contrato 22645)`,
-        tipo_estimado: w.tipo_equipamento,
-        nfe_remessa: w.comprovante_baixa_emc || '-',
-        software: '-',
-        valor_mensal: '-',
-        secretariaDeclarada: (w.secretaria_prevista && w.secretaria_prevista !== 'Não Mapeada') ? w.secretaria_prevista : (w.secretaria_coletada || null),
-        servidorDeclarado: (w.servidor_previsto && w.servidor_previsto !== 'Não Declarado') ? w.servidor_previsto : null,
-        unidadeDeclarada: w.localidade_coletada || null,
-        declaradoNoForm: !!(w.secretaria_prevista && w.secretaria_prevista !== 'Não Mapeada'),
-        statusLogistico: w.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao',
-        comprovanteBaixa: w.comprovante_baixa_emc || null,
-        dataBaixa: w.data_hora_baixa_emc || null,
-        tipoBaixa: w.tipo_baixa_emc || null,
-        origem: 'galpao_conferencia'
-      });
-    }
+    cachedCompiledContrato = { list, kpis };
+    return cachedCompiledContrato;
+  } catch (err) {
+    console.error('[CRITICAL getCompiledContrato Error]:', err);
+    return {
+      list: [],
+      kpis: { total: 0, emCampo: 0, noGalpao: 0, devolvidoEMC: 0, mapeadosForm: 0, semMapeamento: 0 }
+    };
   }
-
-  let emCampo = 0, noGalpao = 0, devolvidoEMC = 0, mapeadosForm = 0, semMapeamento = 0;
-  for (let i = 0; i < list.length; i++) {
-    const it = list[i];
-    if (it.statusLogistico === 'em_campo') emCampo++;
-    else if (it.statusLogistico === 'no_galpao') noGalpao++;
-    else if (it.statusLogistico === 'devolvido_emc') devolvidoEMC++;
-    if (it.declaradoNoForm) mapeadosForm++;
-    else semMapeamento++;
-  }
-
-  const kpis = {
-    total: list.length,
-    emCampo,
-    noGalpao,
-    devolvidoEMC,
-    mapeadosForm,
-    semMapeamento
-  };
-
-  cachedCompiledContrato = { list, kpis };
-  return cachedCompiledContrato;
 }
 
 // Pre-compiled Equipamentos Data & KPIs
 function getCompiledEquipamentos() {
   if (cachedCompiledEquipamentos) return cachedCompiledEquipamentos;
 
-  const { parsedFormRows } = getLookupMaps();
-  let confRows = [];
   try {
-    confRows = db.prepare("SELECT * FROM conferencias_galpao").all() || [];
-  } catch (e) {
-    console.error('[DB Error] conferencias_galpao in getCompiledEquipamentos:', e.message);
-  }
-
-  const confByRowId = new Map();
-  const confByCode = new Map();
-
-  for (const c of confRows) {
-    if (c.inventario_row_id) confByRowId.set(c.inventario_row_id, c);
-    if (c.codigo_bipado) confByCode.set(String(c.codigo_bipado).trim().toUpperCase(), c);
-    if (c.codigo_normalizado) confByCode.set(String(c.codigo_normalizado).trim().toUpperCase(), c);
-  }
-
-  const items = parsedFormRows.map(r => {
-    const rowConf = confByRowId.get(r.id);
-    const d = r.data || {};
-
-    const cpuRaw = r.cpu || d['Patrimônio da CPU'] || '';
-    const monRaw = r.monitor || d['Patrimônio do Monitor'] || '';
-    const monAvRaw = r.monitorAvulso || d['Patrimônio do Monitor Avulso'] || '';
-    const noteRaw = r.notebook || d['Patrimônio do Notebook'] || '';
-
-    const cpuClean = cpuRaw && cpuRaw !== '-' ? cleanAssetCode(cpuRaw).toUpperCase() : '';
-    const monClean = monRaw && monRaw !== '-' ? cleanAssetCode(monRaw).toUpperCase() : '';
-    const monAvClean = monAvRaw && monAvRaw !== '-' ? cleanAssetCode(monAvRaw).toUpperCase() : '';
-    const noteClean = noteRaw && noteRaw !== '-' ? cleanAssetCode(noteRaw).toUpperCase() : '';
-
-    const matchCpu = cpuClean ? confByCode.get(cpuClean) : null;
-    const matchMon = monClean ? confByCode.get(monClean) : null;
-    const matchMonAv = monAvClean ? confByCode.get(monAvClean) : null;
-    const matchNote = noteClean ? confByCode.get(noteClean) : null;
-
-    let statusConf = 'pendente';
-    const confList = [matchCpu, matchMon, matchMonAv, matchNote, rowConf].filter(Boolean);
-
-    let bestConf = null;
-    if (confList.some(c => c.status_etapa === 'devolvido_emc')) {
-      statusConf = 'devolvido_emc';
-      bestConf = confList.find(c => c.status_etapa === 'devolvido_emc');
-    } else if (confList.some(c => c.status_etapa === 'aguardando_retirada_emc' || !c.status_etapa)) {
-      statusConf = 'no_galpao';
-      bestConf = confList.find(c => c.status_etapa === 'aguardando_retirada_emc' || !c.status_etapa);
+    const { parsedFormRows } = getLookupMaps();
+    let confRows = [];
+    try {
+      confRows = db.prepare("SELECT * FROM conferencias_galpao").all() || [];
+    } catch (e) {
+      console.error('[DB Error] conferencias_galpao in getCompiledEquipamentos:', e.message);
     }
 
-    return {
-      id: r.id,
-      servidor: r.servidor || d['Nome completo do servidor'] || 'Não informado',
-      matricula: r.matricula || d['Matrícula do servidor'] || d['Matrícula'] || '-',
-      telefone: r.telefone || d['Telefone do responsável pelo equipamento'] || '-',
-      endereco: r.endereco || d['Endereço'] || (d['Logradouro'] ? `${d['Logradouro']}, ${d['Número'] || 'S/N'} - ${d['Bairro'] || ''}` : '-'),
-      secretaria: r.secretaria || d.Secretaria || 'Não informada',
-      unidade: r.unidade || d['Nome da unidade onde o equipamento está instalado'] || '-',
-      cpu: cpuRaw || '-',
-      cpuStatus: matchCpu ? (matchCpu.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao') : 'pendente',
-      monitor: monRaw || '-',
-      monitorStatus: matchMon ? (matchMon.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao') : 'pendente',
-      monitorAvulso: monAvRaw || '-',
-      notebook: noteRaw || '-',
-      notebookStatus: matchNote ? (matchNote.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao') : 'pendente',
-      statusConferencia: statusConf,
-      comprovanteBaixa: bestConf ? bestConf.comprovante_baixa_emc : null,
-      dataConferencia: bestConf ? (bestConf.data_hora_baixa_emc || bestConf.data_hora_coleta || bestConf.created_at) : null
+    const confByRowId = new Map();
+    const confByCode = new Map();
+
+    for (const c of confRows) {
+      if (c.inventario_row_id) confByRowId.set(c.inventario_row_id, c);
+      if (c.codigo_bipado) confByCode.set(String(c.codigo_bipado).trim().toUpperCase(), c);
+      if (c.codigo_normalizado) confByCode.set(String(c.codigo_normalizado).trim().toUpperCase(), c);
+    }
+
+    const items = parsedFormRows.map(r => {
+      const rowConf = confByRowId.get(r.id);
+      const d = r.data || {};
+
+      const cpuRaw = r.cpu || d['Patrimônio da CPU'] || '';
+      const monRaw = r.monitor || d['Patrimônio do Monitor'] || '';
+      const monAvRaw = r.monitorAvulso || d['Patrimônio do Monitor Avulso'] || '';
+      const noteRaw = r.notebook || d['Patrimônio do Notebook'] || '';
+
+      const cpuClean = cpuRaw && cpuRaw !== '-' ? cleanAssetCode(cpuRaw).toUpperCase() : '';
+      const monClean = monRaw && monRaw !== '-' ? cleanAssetCode(monRaw).toUpperCase() : '';
+      const monAvClean = monAvRaw && monAvRaw !== '-' ? cleanAssetCode(monAvRaw).toUpperCase() : '';
+      const noteClean = noteRaw && noteRaw !== '-' ? cleanAssetCode(noteRaw).toUpperCase() : '';
+
+      const matchCpu = cpuClean ? confByCode.get(cpuClean) : null;
+      const matchMon = monClean ? confByCode.get(monClean) : null;
+      const matchMonAv = monAvClean ? confByCode.get(monAvClean) : null;
+      const matchNote = noteClean ? confByCode.get(noteClean) : null;
+
+      let statusConf = 'pendente';
+      const confList = [matchCpu, matchMon, matchMonAv, matchNote, rowConf].filter(Boolean);
+
+      let bestConf = null;
+      if (confList.some(c => c.status_etapa === 'devolvido_emc')) {
+        statusConf = 'devolvido_emc';
+        bestConf = confList.find(c => c.status_etapa === 'devolvido_emc');
+      } else if (confList.some(c => c.status_etapa === 'aguardando_retirada_emc' || !c.status_etapa)) {
+        statusConf = 'no_galpao';
+        bestConf = confList.find(c => c.status_etapa === 'aguardando_retirada_emc' || !c.status_etapa);
+      }
+
+      return {
+        id: r.id,
+        servidor: r.servidor || d['Nome completo do servidor'] || 'Não informado',
+        matricula: r.matricula || d['Matrícula do servidor'] || d['Matrícula'] || '-',
+        telefone: r.telefone || d['Telefone do responsável pelo equipamento'] || '-',
+        endereco: r.endereco || d['Endereço'] || (d['Logradouro'] ? `${d['Logradouro']}, ${d['Número'] || 'S/N'} - ${d['Bairro'] || ''}` : '-'),
+        secretaria: r.secretaria || d.Secretaria || 'Não informada',
+        unidade: r.unidade || d['Nome da unidade onde o equipamento está instalado'] || '-',
+        cpu: cpuRaw || '-',
+        cpuStatus: matchCpu ? (matchCpu.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao') : 'pendente',
+        monitor: monRaw || '-',
+        monitorStatus: matchMon ? (matchMon.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao') : 'pendente',
+        monitorAvulso: monAvRaw || '-',
+        notebook: noteRaw || '-',
+        notebookStatus: matchNote ? (matchNote.status_etapa === 'devolvido_emc' ? 'devolvido_emc' : 'no_galpao') : 'pendente',
+        statusConferencia: statusConf,
+        comprovanteBaixa: bestConf ? bestConf.comprovante_baixa_emc : null,
+        dataConferencia: bestConf ? (bestConf.data_hora_baixa_emc || bestConf.data_hora_coleta || bestConf.created_at) : null
+      };
+    });
+
+    let devolvidos = 0, noGalpao = 0, pendentes = 0;
+    const secSet = new Set();
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.statusConferencia === 'devolvido_emc') devolvidos++;
+      else if (item.statusConferencia === 'no_galpao') noGalpao++;
+      else pendentes++;
+      if (item.secretaria && item.secretaria !== 'Não informada') secSet.add(item.secretaria.trim());
+    }
+
+    const kpis = {
+      total: items.length,
+      devolvidos,
+      noGalpao,
+      pendentes,
+      secretariasCount: secSet.size
     };
-  });
+    const secretariasDisponiveis = Array.from(secSet).sort();
 
-  let devolvidos = 0, noGalpao = 0, pendentes = 0;
-  const secSet = new Set();
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.statusConferencia === 'devolvido_emc') devolvidos++;
-    else if (item.statusConferencia === 'no_galpao') noGalpao++;
-    else pendentes++;
-    if (item.secretaria && item.secretaria !== 'Não informada') secSet.add(item.secretaria.trim());
+    cachedCompiledEquipamentos = { items, kpis, secretariasDisponiveis };
+    return cachedCompiledEquipamentos;
+  } catch (err) {
+    console.error('[CRITICAL getCompiledEquipamentos Error]:', err);
+    return {
+      items: [],
+      kpis: { total: 0, devolvidos: 0, noGalpao: 0, pendentes: 0, secretariasCount: 0 },
+      secretariasDisponiveis: []
+    };
   }
-
-  const kpis = {
-    total: items.length,
-    devolvidos,
-    noGalpao,
-    pendentes,
-    secretariasCount: secSet.size
-  };
-  const secretariasDisponiveis = Array.from(secSet).sort();
-
-  cachedCompiledEquipamentos = { items, kpis, secretariasDisponiveis };
-  return cachedCompiledEquipamentos;
 }
 
 // Pre-compiled Dashboard Stats
 function getCompiledStats() {
   if (cachedDashboardStats) return cachedDashboardStats;
 
-  const { contractItems, parsedFormRows, formByCode } = getLookupMaps();
-  const totalContratadoEMC = contractItems.length;
-  const totalFormularioServidores = parsedFormRows.length;
+  try {
+    const { contractItems, parsedFormRows, formByCode } = getLookupMaps();
+    const totalContratadoEMC = contractItems.length;
+    const totalFormularioServidores = parsedFormRows.length;
 
-  let contratadosDeclaradosNoForm = 0;
-  for (const c of contractItems) {
-    const code = String(c.item).toUpperCase();
-    const serie = c.n_serie ? String(c.n_serie).toUpperCase() : '';
-    if (formByCode.has(code) || (serie && formByCode.has(serie))) {
-      contratadosDeclaradosNoForm++;
+    let contratadosDeclaradosNoForm = 0;
+    for (const c of contractItems) {
+      const code = String(c.item).toUpperCase();
+      const serie = c.n_serie ? String(c.n_serie).toUpperCase() : '';
+      if (formByCode.has(code) || (serie && formByCode.has(serie))) {
+        contratadosDeclaradosNoForm++;
+      }
     }
-  }
-  const contratadosSemFormulario = Math.max(0, totalContratadoEMC - contratadosDeclaradosNoForm);
+    const contratadosSemFormulario = Math.max(0, totalContratadoEMC - contratadosDeclaradosNoForm);
 
-  let galpaoStats = { total: 0, cpus: 0, monitores: 0, notebooks: 0 };
-  try {
-    galpaoStats = db.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
-        SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
-        SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
-      FROM conferencias_galpao
-      WHERE status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL
-    `).get() || {};
-  } catch (e) {
-    console.error('[DB Error] galpaoStats:', e.message);
-  }
-
-  const totalAguardandoEMC = galpaoStats.total || 0;
-  const cpusGalpao = galpaoStats.cpus || 0;
-  const monitoresGalpao = galpaoStats.monitores || 0;
-  const notebooksGalpao = galpaoStats.notebooks || 0;
-
-  let devolvidosStats = { total: 0, cpus: 0, monitores: 0, notebooks: 0 };
-  try {
-    devolvidosStats = db.prepare(`
-      SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
-        SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
-        SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
-      FROM conferencias_galpao
-      WHERE status_etapa = 'devolvido_emc'
-    `).get() || {};
-  } catch (e) {
-    console.error('[DB Error] devolvidosStats:', e.message);
-  }
-
-  const totalDevolvidosEMC = devolvidosStats.total || 0;
-  const cpusDevolvidos = devolvidosStats.cpus || 0;
-  const monitoresDevolvidos = devolvidosStats.monitores || 0;
-  const notebooksDevolvidos = devolvidosStats.notebooks || 0;
-
-  const totalConferidos = totalAguardandoEMC + totalDevolvidosEMC;
-  const totalEmCampo = Math.max(0, totalContratadoEMC - totalConferidos);
-
-  let conciliationBreakdown = [];
-  try {
-    conciliationBreakdown = db.prepare(`
-      SELECT status_conciliacao, COUNT(*) as count 
-      FROM conferencias_galpao 
-      GROUP BY status_conciliacao
-    `).all() || [];
-  } catch (e) {
-    console.error('[DB Error] conciliationBreakdown:', e.message);
-  }
-
-  let totalConformes = 0;
-  let totalDeslocados = 0;
-  let totalExcedentes = 0;
-  for (const row of conciliationBreakdown) {
-    if (row.status_conciliacao === 'conforme') totalConformes += row.count;
-    else if (row.status_conciliacao === 'deslocado') totalDeslocados += row.count;
-    else if (row.status_conciliacao && row.status_conciliacao.startsWith('excedente')) totalExcedentes += row.count;
-  }
-
-  const secMap = new Map();
-  for (const r of parsedFormRows) {
-    const sec = (r.data?.Secretaria || 'NÃO DEFINIDA').trim().toUpperCase();
-    if (!secMap.has(sec)) {
-      secMap.set(sec, { secretaria: sec, previsto: 0, noGalpao: 0, devolvidoEMC: 0, excedente: 0, faltante: 0 });
+    let galpaoStats = { total: 0, cpus: 0, monitores: 0, notebooks: 0 };
+    try {
+      galpaoStats = db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
+          SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
+          SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
+        FROM conferencias_galpao
+        WHERE status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL
+      `).get() || {};
+    } catch (e) {
+      console.error('[DB Error] galpaoStats:', e.message);
     }
-    secMap.get(sec).previsto++;
-  }
 
-  let checkedBySec = [];
-  try {
-    checkedBySec = db.prepare(`
-      SELECT 
-        COALESCE(secretaria_prevista, secretaria_coletada) as sec,
-        status_conciliacao,
-        status_etapa,
-        COUNT(*) as count
-      FROM conferencias_galpao
-      GROUP BY sec, status_conciliacao, status_etapa
-    `).all() || [];
-  } catch (e) {
-    console.error('[DB Error] checkedBySec:', e.message);
-  }
+    const totalAguardandoEMC = galpaoStats.total || 0;
+    const cpusGalpao = galpaoStats.cpus || 0;
+    const monitoresGalpao = galpaoStats.monitores || 0;
+    const notebooksGalpao = galpaoStats.notebooks || 0;
 
-  for (const item of checkedBySec) {
-    const secName = (item.sec || 'NÃO DEFINIDA').trim().toUpperCase();
-    if (!secMap.has(secName)) {
-      secMap.set(secName, { secretaria: secName, previsto: 0, noGalpao: 0, devolvidoEMC: 0, excedente: 0, faltante: 0 });
+    let devolvidosStats = { total: 0, cpus: 0, monitores: 0, notebooks: 0 };
+    try {
+      devolvidosStats = db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN tipo_equipamento = 'CPU' THEN 1 ELSE 0 END) as cpus,
+          SUM(CASE WHEN tipo_equipamento = 'MONITOR' THEN 1 ELSE 0 END) as monitores,
+          SUM(CASE WHEN tipo_equipamento = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks
+        FROM conferencias_galpao
+        WHERE status_etapa = 'devolvido_emc'
+      `).get() || {};
+    } catch (e) {
+      console.error('[DB Error] devolvidosStats:', e.message);
     }
-    const entry = secMap.get(secName);
-    if (item.status_etapa === 'devolvido_emc') {
-      entry.devolvidoEMC += item.count;
-    } else {
-      entry.noGalpao += item.count;
+
+    const totalDevolvidosEMC = devolvidosStats.total || 0;
+    const cpusDevolvidos = devolvidosStats.cpus || 0;
+    const monitoresDevolvidos = devolvidosStats.monitores || 0;
+    const notebooksDevolvidos = devolvidosStats.notebooks || 0;
+
+    const totalConferidos = totalAguardandoEMC + totalDevolvidosEMC;
+    const totalEmCampo = Math.max(0, totalContratadoEMC - totalConferidos);
+
+    let conciliationBreakdown = [];
+    try {
+      conciliationBreakdown = db.prepare(`
+        SELECT status_conciliacao, COUNT(*) as count 
+        FROM conferencias_galpao 
+        GROUP BY status_conciliacao
+      `).all() || [];
+    } catch (e) {
+      console.error('[DB Error] conciliationBreakdown:', e.message);
     }
-    if (item.status_conciliacao && item.status_conciliacao.startsWith('excedente')) {
-      entry.excedente += item.count;
+
+    let totalConformes = 0;
+    let totalDeslocados = 0;
+    let totalExcedentes = 0;
+    for (const row of conciliationBreakdown) {
+      if (row.status_conciliacao === 'conforme') totalConformes += row.count;
+      else if (row.status_conciliacao === 'deslocado') totalDeslocados += row.count;
+      else if (row.status_conciliacao && row.status_conciliacao.startsWith('excedente')) totalExcedentes += row.count;
     }
+
+    const secMap = new Map();
+    for (const r of parsedFormRows) {
+      const sec = (r.data?.Secretaria || 'NÃO DEFINIDA').trim().toUpperCase();
+      if (!secMap.has(sec)) {
+        secMap.set(sec, { secretaria: sec, previsto: 0, noGalpao: 0, devolvidoEMC: 0, excedente: 0, faltante: 0 });
+      }
+      secMap.get(sec).previsto++;
+    }
+
+    let checkedBySec = [];
+    try {
+      checkedBySec = db.prepare(`
+        SELECT 
+          COALESCE(secretaria_prevista, secretaria_coletada) as sec,
+          status_conciliacao,
+          status_etapa,
+          COUNT(*) as count
+        FROM conferencias_galpao
+        GROUP BY sec, status_conciliacao, status_etapa
+      `).all() || [];
+    } catch (e) {
+      console.error('[DB Error] checkedBySec:', e.message);
+    }
+
+    for (const item of checkedBySec) {
+      const secName = (item.sec || 'NÃO DEFINIDA').trim().toUpperCase();
+      if (!secMap.has(secName)) {
+        secMap.set(secName, { secretaria: secName, previsto: 0, noGalpao: 0, devolvidoEMC: 0, excedente: 0, faltante: 0 });
+      }
+      const entry = secMap.get(secName);
+      if (item.status_etapa === 'devolvido_emc') {
+        entry.devolvidoEMC += item.count;
+      } else {
+        entry.noGalpao += item.count;
+      }
+      if (item.status_conciliacao && item.status_conciliacao.startsWith('excedente')) {
+        entry.excedente += item.count;
+      }
+    }
+
+    for (const [_, entry] of secMap) {
+      const totalConferidoSec = entry.noGalpao + entry.devolvidoEMC;
+      entry.faltante = Math.max(0, entry.previsto - totalConferidoSec);
+    }
+
+    const secretariasList = Array.from(secMap.values());
+
+    const contractTypeCounts = { cpus: 0, monitores: 0, notebooks: 0, outros: 0 };
+    for (const c of contractItems) {
+      const t = (c.tipo_estimado || '').toUpperCase();
+      if (t === 'CPU') contractTypeCounts.cpus++;
+      else if (t === 'MONITOR') contractTypeCounts.monitores++;
+      else if (t === 'NOTEBOOK') contractTypeCounts.notebooks++;
+      else contractTypeCounts.outros++;
+    }
+
+    let lotesList = [];
+    try {
+      lotesList = db.prepare("SELECT * FROM lotes_romaneio_emc ORDER BY id DESC LIMIT 5").all() || [];
+    } catch (e) {}
+
+    let returnsByDoc = [];
+    try {
+      returnsByDoc = db.prepare(`
+        SELECT comprovante_baixa_emc, tipo_equipamento, count(1) as count, min(data_hora_baixa_emc) as data
+        FROM conferencias_galpao
+        WHERE status_etapa = 'devolvido_emc'
+        GROUP BY comprovante_baixa_emc, tipo_equipamento
+        ORDER BY data DESC
+      `).all() || [];
+    } catch (e) {}
+
+    let recentScans = [];
+    try {
+      recentScans = db.prepare("SELECT * FROM conferencias_galpao ORDER BY id DESC LIMIT 10").all() || [];
+    } catch (e) {}
+
+    let totalRomaneios = 0;
+    try {
+      totalRomaneios = db.prepare("SELECT count(1) as c FROM lotes_romaneio_emc").get()?.c || 0;
+    } catch (e) {}
+
+    cachedDashboardStats = {
+      totalContratadoEMC,
+      totalGestaoContratual: totalContratadoEMC + totalExcedentes,
+      totalFormularioServidores,
+      contratadosDeclaradosNoForm,
+      contratadosSemFormulario,
+      totalConferidos,
+      totalEmCampo,
+      totalAguardandoEMC,
+      totalDevolvidosEMC,
+      totalConformes,
+      totalDeslocados,
+      totalExcedentes,
+      contractTypeCounts,
+      cpusGalpao,
+      monitoresGalpao,
+      notebooksGalpao,
+      cpusDevolvidos,
+      monitoresDevolvidos,
+      notebooksDevolvidos,
+      taxaDevolucao: totalContratadoEMC > 0 ? Math.min(100, Math.round((totalDevolvidosEMC / totalContratadoEMC) * 100)) : 0,
+      taxaGeral: totalContratadoEMC > 0 ? Math.min(100, Math.round((totalConferidos / totalContratadoEMC) * 100)) : 0,
+      secretariasList,
+      recentScans,
+      totalRomaneios,
+      lotesList,
+      returnsByDoc
+    };
+
+    return cachedDashboardStats;
+  } catch (err) {
+    console.error('[CRITICAL getCompiledStats Error]:', err);
+    return {
+      totalContratadoEMC: 0,
+      totalGestaoContratual: 0,
+      totalFormularioServidores: 0,
+      contratadosDeclaradosNoForm: 0,
+      contratadosSemFormulario: 0,
+      totalConferidos: 0,
+      totalEmCampo: 0,
+      totalAguardandoEMC: 0,
+      totalDevolvidosEMC: 0,
+      totalConformes: 0,
+      totalDeslocados: 0,
+      totalExcedentes: 0,
+      contractTypeCounts: { cpus: 0, monitores: 0, notebooks: 0, outros: 0 },
+      cpusGalpao: 0,
+      monitoresGalpao: 0,
+      notebooksGalpao: 0,
+      cpusDevolvidos: 0,
+      monitoresDevolvidos: 0,
+      notebooksDevolvidos: 0,
+      taxaDevolucao: 0,
+      taxaGeral: 0,
+      secretariasList: [],
+      recentScans: [],
+      totalRomaneios: 0,
+      lotesList: [],
+      returnsByDoc: []
+    };
   }
-
-  for (const [_, entry] of secMap) {
-    const totalConferidoSec = entry.noGalpao + entry.devolvidoEMC;
-    entry.faltante = Math.max(0, entry.previsto - totalConferidoSec);
-  }
-
-  const secretariasList = Array.from(secMap.values());
-
-  const contractTypeCounts = { cpus: 0, monitores: 0, notebooks: 0, outros: 0 };
-  for (const c of contractItems) {
-    const t = (c.tipo_estimado || '').toUpperCase();
-    if (t === 'CPU') contractTypeCounts.cpus++;
-    else if (t === 'MONITOR') contractTypeCounts.monitores++;
-    else if (t === 'NOTEBOOK') contractTypeCounts.notebooks++;
-    else contractTypeCounts.outros++;
-  }
-
-  let lotesList = [];
-  try {
-    lotesList = db.prepare("SELECT * FROM lotes_romaneio_emc ORDER BY id DESC LIMIT 5").all() || [];
-  } catch (e) {}
-
-  let returnsByDoc = [];
-  try {
-    returnsByDoc = db.prepare(`
-      SELECT comprovante_baixa_emc, tipo_equipamento, count(1) as count, min(data_hora_baixa_emc) as data
-      FROM conferencias_galpao
-      WHERE status_etapa = 'devolvido_emc'
-      GROUP BY comprovante_baixa_emc, tipo_equipamento
-      ORDER BY data DESC
-    `).all() || [];
-  } catch (e) {}
-
-  let recentScans = [];
-  try {
-    recentScans = db.prepare("SELECT * FROM conferencias_galpao ORDER BY id DESC LIMIT 10").all() || [];
-  } catch (e) {}
-
-  let totalRomaneios = 0;
-  try {
-    totalRomaneios = db.prepare("SELECT count(1) as c FROM lotes_romaneio_emc").get()?.c || 0;
-  } catch (e) {}
-
-  cachedDashboardStats = {
-    totalContratadoEMC,
-    totalGestaoContratual: totalContratadoEMC + totalExcedentes,
-    totalFormularioServidores,
-    contratadosDeclaradosNoForm,
-    contratadosSemFormulario,
-    totalConferidos,
-    totalEmCampo,
-    totalAguardandoEMC,
-    totalDevolvidosEMC,
-    totalConformes,
-    totalDeslocados,
-    totalExcedentes,
-    contractTypeCounts,
-    cpusGalpao,
-    monitoresGalpao,
-    notebooksGalpao,
-    cpusDevolvidos,
-    monitoresDevolvidos,
-    notebooksDevolvidos,
-    taxaDevolucao: totalContratadoEMC > 0 ? Math.min(100, Math.round((totalDevolvidosEMC / totalContratadoEMC) * 100)) : 0,
-    taxaGeral: totalContratadoEMC > 0 ? Math.min(100, Math.round((totalConferidos / totalContratadoEMC) * 100)) : 0,
-    secretariasList,
-    recentScans,
-    totalRomaneios,
-    lotesList,
-    returnsByDoc
-  };
-
-  return cachedDashboardStats;
 }
 
 // ==========================================
@@ -2386,18 +2414,5 @@ const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0';
 
 app.listen(PORT, HOST, () => {
-  console.log(`[API Inventário EMC] Rodando com sucesso na porta ${PORT} (${HOST})`);
-
-  // Asynchronous pre-warming in next tick so Render port detection is instant
-  setImmediate(() => {
-    try {
-      console.log('[Cache] Pré-aquecendo inventário para resposta instantânea...');
-      getCompiledContrato();
-      getCompiledEquipamentos();
-      getCompiledStats();
-      console.log('[Cache] Pré-aquecimento concluído com sucesso!');
-    } catch (e) {
-      console.error('[Cache] Aviso no pré-aquecimento:', e.message);
-    }
-  });
+  console.log(`[API Inventário EMC] Servidor ativo e pronto na porta ${PORT} (${HOST})`);
 });
