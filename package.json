@@ -5,8 +5,8 @@
   "type": "module",
   "main": "Inventario/server/src/server.js",
   "scripts": {
-    "start": "node Inventario/server/src/server.js",
-    "server": "node Inventario/server/src/server.js"
+    "start": "node --max-old-space-size=400 Inventario/server/src/server.js",
+    "server": "node --max-old-space-size=400 Inventario/server/src/server.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
