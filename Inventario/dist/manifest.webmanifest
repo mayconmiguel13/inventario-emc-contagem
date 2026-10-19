@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Inventário EMC • Prefeitura de Contagem",
+  "short_name": "Inventário EMC",
+  "description": "Sistema de Gestão de Ativos e Devolução de Equipamentos Locados EMC — Prefeitura de Contagem",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

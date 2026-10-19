@@ -1,0 +1,30 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.codex
+
+# Build and Temp logs
+*.log
+tmp/
+output/
+backups/
+
+# SQLite WAL and temporary files (keep main .sqlite)
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Keep dist and sqlite files
+dist/
+!Inventario/dist/
+!inventario.sqlite
+!Inventario/inventario.sqlite

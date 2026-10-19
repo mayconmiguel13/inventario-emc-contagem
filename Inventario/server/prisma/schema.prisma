@@ -1,0 +1,418 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  SOCIO
+  ADVOGADO
+  ESTAGIARIO
+  FINANCEIRO
+  CLIENTE
+}
+
+enum TipoPessoa {
+  FISICA
+  JURIDICA
+}
+
+enum FaseProcessual {
+  CONHECIMENTO
+  RECURSAL
+  EXECUCAO
+  CUMPRIMENTO_SENTENCA
+  ARQUIVADO
+  ACORDO
+}
+
+enum StatusPrazo {
+  PENDENTE
+  CONCLUIDO
+  FATAL
+  PRORROGADO
+}
+
+enum StatusTarefa {
+  A_FAZER
+  EM_ANDAMENTO
+  CONCLUIDO
+  REVISAO
+}
+
+enum TipoLancamento {
+  RECEITA
+  DESPESA
+}
+
+enum StatusLancamento {
+  PAGO
+  PENDENTE
+  ATRASADO
+  CANCELADO
+}
+
+enum StatusEnvelope {
+  RASCUNHO
+  PENDENTE
+  ASSINADO
+  EXPIRADO
+  CANCELADO
+}
+
+model Sociedade {
+  id              Int       @id @default(autoincrement())
+  razaoSocial     String    @db.VarChar(191)
+  registroOab     String    @db.VarChar(100)
+  cnpj            String    @unique @db.VarChar(30)
+  email           String    @db.VarChar(150)
+  telefone        String?   @db.VarChar(50)
+  responsavel     String    @db.VarChar(150)
+  cidade          String?   @db.VarChar(100)
+  uf              String?   @db.VarChar(2)
+  chavePix        String?   @db.VarChar(150)
+  primaryColor    String    @default("#405189") @db.VarChar(20)
+  layoutMode      String    @default("light") @db.VarChar(20)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  users           User[]
+  clientes        Cliente[]
+  processos       Processo[]
+  prazos          Prazo[]
+  audiencias      Audiencia[]
+  tarefas         Tarefa[]
+  lancamentos     LancamentoFinanceiro[]
+  publicacoes     PublicacaoDJEN[]
+  documentos      Documento[]
+  envelopes       Envelope[]
+  comunicacoes    Comunicacao[]
+  auditLogs       AuditLog[]
+
+  @@map("sociedades")
+}
+
+model User {
+  id              Int       @id @default(autoincrement())
+  sociedadeId     Int
+  nome            String    @db.VarChar(150)
+  email           String    @unique @db.VarChar(150)
+  senhaHash       String    @db.VarChar(255)
+  telefone        String?   @db.VarChar(50)
+  cargo           String?   @db.VarChar(100)
+  oab             String?   @db.VarChar(50)
+  role            Role      @default(ADVOGADO)
+  status          String    @default("Ativo") @db.VarChar(20)
+  avatar          String?   @db.VarChar(10)
+  corAvatar       String    @default("primary") @db.VarChar(30)
+  permissoes      Json?     // { financeiro: bool, excluir: bool, assinar: bool, djen: bool, relatorios: bool }
+  autenticacao2fa Boolean   @default(false)
+  secret2fa       String?   @db.VarChar(100)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sociedade       Sociedade @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  refreshTokens   RefreshToken[]
+  tarefasCriadas  Tarefa[]  @relation("TarefaCriador")
+  tarefasAtrib    Tarefa[]  @relation("TarefaResponsavel")
+  prazosCriados   Prazo[]   @relation("PrazoCriador")
+  prazosAtrib     Prazo[]   @relation("PrazoResponsavel")
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique @db.VarChar(255)
+  userId    Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id          Int       @id @default(autoincrement())
+  sociedadeId Int
+  userId      Int?
+  acao        String    @db.VarChar(100)
+  entidade    String    @db.VarChar(100)
+  entidadeId  Int?
+  detalhes    Json?
+  ip          String?   @db.VarChar(50)
+  userAgent   String?   @db.VarChar(255)
+  createdAt   DateTime  @default(now())
+
+  sociedade   Sociedade @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
+
+model Cliente {
+  id          Int         @id @default(autoincrement())
+  sociedadeId Int
+  tipo        TipoPessoa  @default(FISICA)
+  nome        String      @db.VarChar(150)
+  cpfCnpj     String      @db.VarChar(30)
+  email       String?     @db.VarChar(150)
+  telefone    String?     @db.VarChar(50)
+  profissao   String?     @db.VarChar(100)
+  estadoCivil String?     @db.VarChar(50)
+  rg          String?     @db.VarChar(30)
+  cep         String?     @db.VarChar(20)
+  logradouro  String?     @db.VarChar(200)
+  numero      String?     @db.VarChar(20)
+  complemento String?     @db.VarChar(100)
+  bairro      String?     @db.VarChar(100)
+  cidade      String?     @db.VarChar(100)
+  uf          String?     @db.VarChar(2)
+  status      String      @default("Ativo") @db.VarChar(30)
+  avatar      String?     @db.VarChar(10)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  sociedade   Sociedade   @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  processos   Processo[]
+  lancamentos LancamentoFinanceiro[]
+  comunicacoes Comunicacao[]
+
+  @@map("clientes")
+}
+
+model Processo {
+  id              Int             @id @default(autoincrement())
+  sociedadeId     Int
+  clienteId       Int
+  numeroCnj       String          @unique @db.VarChar(50)
+  titulo          String          @db.VarChar(200)
+  classe          String?         @db.VarChar(100)
+  area            String?         @db.VarChar(100)
+  varaTribunal    String?         @db.VarChar(150)
+  comarca         String?         @db.VarChar(100)
+  uf              String?         @db.VarChar(2)
+  polo            String          @default("Ativo") @db.VarChar(50)
+  parteContraria  String?         @db.VarChar(150)
+  valorCausa      Decimal?        @db.Decimal(12, 2)
+  fase            FaseProcessual  @default(CONHECIMENTO)
+  segredoJustica  Boolean         @default(false)
+  probabilidade   String?         @db.VarChar(50) // Provavel, Possivel, Remota
+  status          String          @default("Em Andamento") @db.VarChar(50)
+  observacoes     String?         @db.Text
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  sociedade       Sociedade       @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  cliente         Cliente         @relation(fields: [clienteId], references: [id], onDelete: Restrict)
+  prazos          Prazo[]
+  audiencias      Audiencia[]
+  tarefas         Tarefa[]
+  publicacoes     PublicacaoDJEN[]
+  documentos      Documento[]
+  lancamentos     LancamentoFinanceiro[]
+
+  @@map("processos")
+}
+
+model Prazo {
+  id              Int         @id @default(autoincrement())
+  sociedadeId     Int
+  processoId      Int?
+  responsavelId   Int?
+  criadorId       Int?
+  titulo          String      @db.VarChar(200)
+  descricao       String?     @db.Text
+  tipo            String      @default("CPC") @db.VarChar(50) // CPC (dias úteis), CLT, Administrativo
+  dataPublicacao  DateTime?
+  dataLimite      DateTime
+  diasPrazo       Int?
+  status          StatusPrazo @default(PENDENTE)
+  prioridade      String      @default("Alta") @db.VarChar(30)
+  concluidoEm     DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  sociedade       Sociedade   @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  processo        Processo?   @relation(fields: [processoId], references: [id], onDelete: SetNull)
+  responsavel     User?       @relation("PrazoResponsavel", fields: [responsavelId], references: [id], onDelete: SetNull)
+  criador         User?       @relation("PrazoCriador", fields: [criadorId], references: [id], onDelete: SetNull)
+
+  @@map("prazos")
+}
+
+model Audiencia {
+  id              Int       @id @default(autoincrement())
+  sociedadeId     Int
+  processoId      Int?
+  titulo          String    @db.VarChar(200)
+  tipo            String    @default("Instrução e Julgamento") @db.VarChar(100)
+  formato         String    @default("Presencial") @db.VarChar(50) // Presencial, Virtual, Híbrida
+  linkAcesso      String?   @db.VarChar(255)
+  local           String?   @db.VarChar(200)
+  dataHora        DateTime
+  observacoes     String?   @db.Text
+  status          String    @default("Agendada") @db.VarChar(50)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sociedade       Sociedade @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  processo        Processo? @relation(fields: [processoId], references: [id], onDelete: SetNull)
+
+  @@map("audiencias")
+}
+
+model Tarefa {
+  id              Int          @id @default(autoincrement())
+  sociedadeId     Int
+  processoId      Int?
+  responsavelId   Int?
+  criadorId       Int?
+  titulo          String       @db.VarChar(200)
+  descricao       String?      @db.Text
+  status          StatusTarefa @default(A_FAZER)
+  prioridade      String       @default("Média") @db.VarChar(30)
+  dataLimite      DateTime?
+  etiquetas       Json?        // ["Petição", "Urgente", "Pesquisa"]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  sociedade       Sociedade    @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  processo        Processo?    @relation(fields: [processoId], references: [id], onDelete: SetNull)
+  responsavel     User?        @relation("TarefaResponsavel", fields: [responsavelId], references: [id], onDelete: SetNull)
+  criador         User?        @relation("TarefaCriador", fields: [criadorId], references: [id], onDelete: SetNull)
+
+  @@map("tarefas")
+}
+
+model LancamentoFinanceiro {
+  id              Int              @id @default(autoincrement())
+  sociedadeId     Int
+  processoId      Int?
+  clienteId       Int?
+  clienteNome     String?          @db.VarChar(150)
+  processoCnj     String?          @db.VarChar(50)
+  tipo            String           @default("Contratual") @db.VarChar(50) // Contratual, Êxito, Partido / Mensalidade, Sucumbência, Reembolso de Custas, Despesa
+  categoria       String?          @db.VarChar(100) // Honorários, Custas Judiciais, Perito, Operacional
+  descricao       String           @db.VarChar(255)
+  valor           Decimal          @db.Decimal(12, 2)
+  dataVencimento  DateTime
+  dataPagamento   DateTime?
+  status          String           @default("Em Aberto") @db.VarChar(50) // Em Aberto, Pago, Atrasado, Cancelado
+  formaPagamento  String?          @db.VarChar(50) // Pix, Boleto Bancário, Transferência, Depósito Judicial
+  comprovanteUrl  String?          @db.VarChar(255)
+  observacoes     String?          @db.Text
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  sociedade       Sociedade        @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  processo        Processo?        @relation(fields: [processoId], references: [id], onDelete: SetNull)
+  cliente         Cliente?         @relation(fields: [clienteId], references: [id], onDelete: SetNull)
+
+  @@map("lancamentos_financeiros")
+}
+
+model PublicacaoDJEN {
+  id                Int       @id @default(autoincrement())
+  sociedadeId       Int
+  processoId        Int?
+  numeroCnj         String    @db.VarChar(50)
+  tribunal          String    @db.VarChar(100)
+  orgaoJulgador     String?   @db.VarChar(150)
+  edicao            String?   @db.VarChar(150)
+  dataPublicacao    DateTime
+  dataDisponib      DateTime?
+  teorPublicacao    String    @db.LongText
+  prazoSugerido     Int?
+  tipoAtoSugerido   String?   @db.VarChar(100)
+  status            String    @default("Nova") @db.VarChar(50) // Nova, Lida, Prazo Gerado
+  urgencia          String    @default("Normal") @db.VarChar(50) // Fatal, Urgente, Normal, Baixa
+  convertida        Boolean   @default(false)
+  prazoVinculadoId  Int?
+  tarefaVinculadaId Int?
+  hashCertidao      String?   @db.VarChar(128)
+  createdAt         DateTime  @default(now())
+
+  sociedade         Sociedade @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  processo          Processo? @relation(fields: [processoId], references: [id], onDelete: SetNull)
+
+  @@map("publicacoes_djen")
+}
+
+model Documento {
+  id              Int       @id @default(autoincrement())
+  sociedadeId     Int
+  processoId      Int?
+  titulo          String    @db.VarChar(200)
+  tipo            String    @db.VarChar(100) // Petição Inicial, Procuração, Recurso, Contrato
+  conteudo        String?   @db.LongText
+  autor           String?   @db.VarChar(150)
+  versao          Int       @default(1)
+  status          String    @default("Minuta") @db.VarChar(50)
+  urlArquivo      String?   @db.VarChar(255)
+  tamanho         String?   @db.VarChar(50)
+  tamanhoBytes    Int?
+  hashSha256      String?   @db.VarChar(128)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sociedade       Sociedade @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  processo        Processo? @relation(fields: [processoId], references: [id], onDelete: SetNull)
+
+  @@map("documentos")
+}
+
+model Envelope {
+  id                Int            @id @default(autoincrement())
+  sociedadeId       Int
+  codigo            String?        @unique @db.VarChar(50) // ENV-2026-001
+  titulo            String         @db.VarChar(200)
+  documentoTipo     String?        @db.VarChar(100) // Procuração, Contrato, etc.
+  clienteId         Int?
+  clienteNome       String?        @db.VarChar(150)
+  clienteDoc        String?        @db.VarChar(30)
+  clienteTelefone   String?        @db.VarChar(50)
+  clienteEmail      String?        @db.VarChar(150)
+  processoCnj       String?        @db.VarChar(50)
+  status            StatusEnvelope @default(PENDENTE)
+  metodoAssinatura  String         @default("eletronica_inapp") @db.VarChar(50) // eletronica_inapp, gov_br, whatsapp_sms
+  documentoUrl      String?        @db.VarChar(255)
+  documentoConteudo String?        @db.LongText
+  hashSha256        String?        @db.VarChar(128)
+  signatarios       Json?          // [{ nome, email, cpf, status, assinadoEm, ip, userAgent }]
+  assinaturaData    Json?          // { signatarioNome, signatarioCpf, assinadoEm, ipSignatario, geolocalizacao, navegador, rubricaBase64 }
+  dataExpiracao     DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  sociedade         Sociedade      @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+
+  @@map("envelopes")
+}
+
+model Comunicacao {
+  id           Int       @id @default(autoincrement())
+  sociedadeId  Int
+  clienteId    Int?
+  clienteNome  String?   @db.VarChar(150)
+  destinatario String    @db.VarChar(150)
+  telefone     String?   @db.VarChar(50)
+  canal        String    @default("WhatsApp") @db.VarChar(50) // WhatsApp, E-mail, SMS
+  tipo         String    @db.VarChar(100) // Lembrete de Audiência, Atualização de Andamento, Cobrança de Honorários com PIX
+  processoCnj  String?   @db.VarChar(50)
+  status       String    @default("Entregue") @db.VarChar(50) // Enviado, Entregue, Lido, Respondido, Falha
+  texto        String    @db.Text
+  payload      Json?
+  createdAt    DateTime  @default(now())
+
+  sociedade    Sociedade @relation(fields: [sociedadeId], references: [id], onDelete: Cascade)
+  cliente      Cliente?  @relation(fields: [clienteId], references: [id], onDelete: SetNull)
+
+  @@map("comunicacoes")
+}
