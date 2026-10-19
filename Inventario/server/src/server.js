@@ -5,21 +5,29 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
+
 let Database;
 try {
   Database = require('better-sqlite3');
 } catch (e) {
   try {
-    Database = require('d:/LadingPage-Inventario/node_modules/better-sqlite3');
+    Database = require(path.resolve(process.cwd(), 'node_modules/better-sqlite3'));
   } catch (err) {
-    throw new Error('Falha ao carregar better-sqlite3: ' + err.message);
+    try {
+      Database = require(path.resolve(__dirname, '../../../node_modules/better-sqlite3'));
+    } catch (err2) {
+      try {
+        Database = require('d:/LadingPage-Inventario/node_modules/better-sqlite3');
+      } catch (err3) {
+        throw new Error('Falha ao carregar better-sqlite3: ' + e.message);
+      }
+    }
   }
 }
 const pdfParse = require('pdf-parse');
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Intelligent DB path resolution (Cloud Linux / Docker vs Local Windows)
 const possibleDbPaths = [
@@ -28,11 +36,12 @@ const possibleDbPaths = [
   path.resolve(__dirname, '../../inventario.sqlite'),
   path.resolve(__dirname, '../inventario.sqlite'),
   path.resolve(process.cwd(), 'inventario.sqlite'),
+  path.resolve(process.cwd(), 'Inventario/inventario.sqlite'),
   'd:/LadingPage-Inventario/inventario.sqlite'
 ].filter(Boolean);
 
 const DB_PATH = possibleDbPaths.find(p => fs.existsSync(p)) || path.resolve(__dirname, '../../../inventario.sqlite');
-console.log(`[DB] Usando banco de dados em: ${DB_PATH}`);
+console.log(`[DB] Usando banco de dados em: ${DB_PATH} (Existe: ${fs.existsSync(DB_PATH)})`);
 
 process.on('uncaughtException', (err) => {
   console.error('[CRITICAL UNCAUGHT EXCEPTION]:', err);
@@ -2361,10 +2370,11 @@ const possibleDistPaths = [
   path.resolve(__dirname, '../../dist'),
   path.resolve(__dirname, '../../../dist'),
   path.resolve(process.cwd(), 'dist'),
+  path.resolve(process.cwd(), 'Inventario/dist'),
   'd:/LadingPage-Inventario/Inventario/dist'
 ].filter(Boolean);
 const clientDistPath = possibleDistPaths.find(p => fs.existsSync(p)) || path.resolve(__dirname, '../../dist');
-console.log(`[Static] Servindo frontend de: ${clientDistPath}`);
+console.log(`[Static] Servindo frontend de: ${clientDistPath} (index.html: ${fs.existsSync(path.resolve(clientDistPath, 'index.html'))})`);
 app.use(express.static(clientDistPath));
 
 app.get('*', (req, res, next) => {
@@ -2372,17 +2382,22 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.resolve(clientDistPath, 'index.html'));
 });
 
-try {
-  console.log('[Cache] Pré-aquecendo inventário para resposta instantânea...');
-  getCompiledContrato();
-  getCompiledEquipamentos();
-  getCompiledStats();
-  console.log('[Cache] Pré-aquecimento concluído com sucesso!');
-} catch (e) {
-  console.error('[Cache] Aviso no pré-aquecimento:', e.message);
-}
-
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`[API Inventário EMC] Rodando com sucesso na porta ${PORT}`);
+const HOST = '0.0.0.0';
+
+app.listen(PORT, HOST, () => {
+  console.log(`[API Inventário EMC] Rodando com sucesso na porta ${PORT} (${HOST})`);
+
+  // Asynchronous pre-warming in next tick so Render port detection is instant
+  setImmediate(() => {
+    try {
+      console.log('[Cache] Pré-aquecendo inventário para resposta instantânea...');
+      getCompiledContrato();
+      getCompiledEquipamentos();
+      getCompiledStats();
+      console.log('[Cache] Pré-aquecimento concluído com sucesso!');
+    } catch (e) {
+      console.error('[Cache] Aviso no pré-aquecimento:', e.message);
+    }
+  });
 });
