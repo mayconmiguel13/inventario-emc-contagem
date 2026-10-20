@@ -1633,6 +1633,8 @@ app.get('/api/galpao/itens', (req, res) => {
       query += " AND (status_etapa = 'aguardando_retirada_emc' OR status_etapa IS NULL)";
     } else if (status === 'devolvido_emc') {
       query += " AND status_etapa = 'devolvido_emc'";
+    } else if (status === 'excedente') {
+      query += " AND (status_conciliacao LIKE 'excedente%')";
     }
 
     if (tipo) {
@@ -1826,6 +1828,32 @@ app.post('/api/sistema/reset-conferencias', (req, res) => {
     });
   } catch (err) {
     console.error('Error reset:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Download de backup do banco de dados SQLite
+app.get('/api/sistema/backup-db', (req, res) => {
+  try {
+    if (!fs.existsSync(DB_PATH)) {
+      return res.status(404).json({ success: false, message: 'Arquivo do banco de dados não encontrado.' });
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    res.download(DB_PATH, `inventario_contagem_backup_${today}.sqlite`);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Limpeza de cache de consultas em memória
+app.post('/api/sistema/limpar-cache', (req, res) => {
+  try {
+    invalidateCache();
+    res.json({
+      success: true,
+      message: 'Cache em memória invalidado com sucesso! Os dados foram recarregados a partir do banco de dados SQLite.'
+    });
+  } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
