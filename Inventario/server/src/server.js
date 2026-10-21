@@ -64,6 +64,208 @@ try {
   console.warn('[DB Pragma warning]:', e.message);
 }
 
+// ==========================================
+// TURSO CLOUD DATABASE REPLICATION & SYNC
+// ==========================================
+const TURSO_URL = (process.env.TURSO_DATABASE_URL || 'https://inventario-contagem-mayconmiguel.aws-sa-east-1.turso.io')
+  .replace(/^libsql:\/\//, 'https://');
+const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN || 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTI1ODc0NDIsImlkIjoiMDFhMTVlODYtMmIwMS03ZTQwLTk5ODctZmY1NjY0NjUwOTc1Iiwia2lkIjoid0tuUjN5OGxoLW5SVDhBcXNGVkI4UlhYWG42dFBqX2h2VDVnRE9ybzY3QSIsInJpZCI6IjBkZjNlOWJmLWI0MGEtNDE0Ni1hMDI5LWE3M2M3NTIxOTg4OSJ9.4XZyt_vTPcQZIkmk8qEgAPtCCpRhRTCKDGECCJHOBAV9rjO0kMczi95NCEGEmLem9NBR9VGxiNxLq5Dx5y6qAg';
+
+let lastTursoSyncTime = null;
+let lastTursoStatus = 'Iniciando conexão...';
+let isSyncingTurso = false;
+
+function valueToTursoArg(val) {
+  if (val === null || val === undefined) return { type: 'null' };
+  if (typeof val === 'number') {
+    return Number.isInteger(val) ? { type: 'integer', value: String(val) } : { type: 'float', value: val };
+  }
+  if (typeof val === 'bigint') return { type: 'integer', value: String(val) };
+  return { type: 'text', value: String(val) };
+}
+
+async function executeTurso(sql, args = []) {
+  if (!TURSO_URL || !TURSO_TOKEN) return null;
+  try {
+    const formattedArgs = args.map(valueToTursoArg);
+    const res = await fetch(`${TURSO_URL}/v2/pipeline`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${TURSO_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        requests: [
+          { type: 'execute', stmt: { sql, args: formattedArgs } },
+          { type: 'close' }
+        ]
+      })
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('[Turso Execution Error]:', err.message);
+    return null;
+  }
+}
+
+async function executeTursoBatch(stmts) {
+  if (!TURSO_URL || !TURSO_TOKEN || !stmts.length) return null;
+  try {
+    const requests = stmts.map(s => ({
+      type: 'execute',
+      stmt: {
+        sql: s.sql,
+        args: (s.args || []).map(valueToTursoArg)
+      }
+    }));
+    requests.push({ type: 'close' });
+
+    const res = await fetch(`${TURSO_URL}/v2/pipeline`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${TURSO_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ requests })
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('[Turso Batch Error]:', err.message);
+    return null;
+  }
+}
+
+function tursoResultToObjects(result) {
+  if (!result || !result.cols || !result.rows) return [];
+  const colNames = result.cols.map(c => c.name);
+  return result.rows.map(row => {
+    const obj = {};
+    row.forEach((cell, idx) => {
+      const col = colNames[idx];
+      if (cell.type === 'null') obj[col] = null;
+      else if (cell.type === 'integer') obj[col] = Number(cell.value);
+      else if (cell.type === 'float') obj[col] = cell.value;
+      else obj[col] = cell.value;
+    });
+    return obj;
+  });
+}
+
+function syncRecordToTurso(tableName, id) {
+  if (!TURSO_URL || !TURSO_TOKEN || !id) return;
+  try {
+    const row = db.prepare(`SELECT * FROM "${tableName}" WHERE id = ?`).get(id);
+    if (!row) return;
+    const cols = Object.keys(row);
+    const colList = cols.map(c => `"${c}"`).join(', ');
+    const placeholders = cols.map(() => '?').join(', ');
+    const sql = `INSERT OR REPLACE INTO "${tableName}" (${colList}) VALUES (${placeholders})`;
+    const args = cols.map(c => row[c]);
+    executeTurso(sql, args).catch(err => console.error(`[Turso Sync ${tableName}] error:`, err.message));
+  } catch (e) {
+    console.error(`[Turso Sync ${tableName}] error:`, e.message);
+  }
+}
+
+function syncCodesToTurso(tableName, codes) {
+  if (!TURSO_URL || !TURSO_TOKEN || !codes || !codes.length) return;
+  try {
+    const uniqueCodes = [...new Set(codes.filter(Boolean))];
+    const placeholders = uniqueCodes.map(() => '?').join(', ');
+    const rows = db.prepare(`SELECT * FROM "${tableName}" WHERE codigo_bipado IN (${placeholders}) OR codigo_normalizado IN (${placeholders})`).all(...uniqueCodes, ...uniqueCodes);
+    if (!rows.length) return;
+    const cols = Object.keys(rows[0]);
+    const colList = cols.map(c => `"${c}"`).join(', ');
+    const valPlaceholders = cols.map(() => '?').join(', ');
+    const sql = `INSERT OR REPLACE INTO "${tableName}" (${colList}) VALUES (${valPlaceholders})`;
+    const stmts = rows.map(r => ({ sql, args: cols.map(c => r[c]) }));
+    executeTursoBatch(stmts).catch(err => console.error(`[Turso Sync Codes ${tableName}] error:`, err.message));
+  } catch (e) {
+    console.error(`[Turso Sync Codes ${tableName}] error:`, e.message);
+  }
+}
+
+function syncBatchToTurso(tableName, ids) {
+  if (!TURSO_URL || !TURSO_TOKEN || !ids || !ids.length) return;
+  try {
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = db.prepare(`SELECT * FROM "${tableName}" WHERE id IN (${placeholders})`).all(...ids);
+    if (!rows.length) return;
+    const cols = Object.keys(rows[0]);
+    const colList = cols.map(c => `"${c}"`).join(', ');
+    const placeholdersVals = cols.map(() => '?').join(', ');
+    const sql = `INSERT OR REPLACE INTO "${tableName}" (${colList}) VALUES (${placeholdersVals})`;
+    const stmts = rows.map(r => ({ sql, args: cols.map(c => r[c]) }));
+    executeTursoBatch(stmts).catch(err => console.error(`[Turso Batch ${tableName}] error:`, err.message));
+  } catch (e) {
+    console.error(`[Turso Batch ${tableName}] error:`, e.message);
+  }
+}
+
+function syncDeleteToTurso(tableName, ids) {
+  if (!TURSO_URL || !TURSO_TOKEN || !ids || !ids.length) return;
+  const placeholders = ids.map(() => '?').join(', ');
+  executeTurso(`DELETE FROM "${tableName}" WHERE id IN (${placeholders})`, ids)
+    .catch(err => console.error(`[Turso Delete ${tableName}] error:`, err.message));
+}
+
+function syncResetToTurso() {
+  if (!TURSO_URL || !TURSO_TOKEN) return;
+  executeTurso('DELETE FROM conferencias_galpao').catch(console.error);
+  executeTurso('DELETE FROM lotes_romaneio_emc').catch(console.error);
+}
+
+async function syncFromTurso() {
+  if (!TURSO_URL || !TURSO_TOKEN || isSyncingTurso) return;
+  isSyncingTurso = true;
+  try {
+    console.log('[Turso] Sincronizando dados da nuvem Turso para o banco SQLite local...');
+    
+    // 1. Sincronizar conferencias_galpao
+    const resGalpao = await executeTurso('SELECT * FROM conferencias_galpao');
+    if (resGalpao && resGalpao.results && resGalpao.results[0]?.response?.result) {
+      const rows = tursoResultToObjects(resGalpao.results[0].response.result);
+      if (rows.length > 0) {
+        const cols = Object.keys(rows[0]);
+        const colList = cols.map(c => `"${c}"`).join(', ');
+        const placeholders = cols.map(c => `@${c}`).join(', ');
+        const upsert = db.prepare(`INSERT OR REPLACE INTO conferencias_galpao (${colList}) VALUES (${placeholders})`);
+        const runTx = db.transaction((items) => {
+          for (const it of items) upsert.run(it);
+        });
+        runTx(rows);
+        console.log(`[Turso] Sincronizados ${rows.length} itens em conferencias_galpao.`);
+      }
+    }
+
+    // 2. Sincronizar lotes_romaneio_emc
+    const resLotes = await executeTurso('SELECT * FROM lotes_romaneio_emc');
+    if (resLotes && resLotes.results && resLotes.results[0]?.response?.result) {
+      const lotes = tursoResultToObjects(resLotes.results[0].response.result);
+      if (lotes.length > 0) {
+        const cols = Object.keys(lotes[0]);
+        const colList = cols.map(c => `"${c}"`).join(', ');
+        const placeholders = cols.map(c => `@${c}`).join(', ');
+        const upsertLote = db.prepare(`INSERT OR REPLACE INTO lotes_romaneio_emc (${colList}) VALUES (${placeholders})`);
+        const runLotesTx = db.transaction((items) => {
+          for (const l of items) upsertLote.run(l);
+        });
+        runLotesTx(lotes);
+        console.log(`[Turso] Sincronizados ${lotes.length} lotes de romaneio.`);
+      }
+    }
+
+    lastTursoSyncTime = new Date().toLocaleString('pt-BR');
+    lastTursoStatus = 'Conectado e Sincronizado';
+    invalidateCache();
+  } catch (err) {
+    console.error('[Turso Sync Error]:', err.message);
+    lastTursoStatus = `Erro: ${err.message}`;
+  } finally {
+    isSyncingTurso = false;
+  }
+}
+
 // Ensure tables & columns
 db.exec(`
   CREATE TABLE IF NOT EXISTS base_contratual_emc (
@@ -1158,6 +1360,7 @@ app.post('/api/conciliacao/upload', (req, res) => {
     });
 
     runTx();
+    syncCodesToTurso('conferencias_galpao', itemsToProcess.map(it => it.codigo));
     invalidateCache();
 
     res.json({
@@ -1231,6 +1434,7 @@ app.post('/api/conciliacao/bipar', (req, res) => {
       recordId = ins.lastInsertRowid;
     }
 
+    syncRecordToTurso('conferencias_galpao', recordId);
     invalidateCache();
 
     res.json({
@@ -1601,6 +1805,8 @@ app.post('/api/emc/confirmar-baixa', (req, res) => {
     });
 
     runTx();
+    syncRecordToTurso('lotes_romaneio_emc', loteId);
+    syncCodesToTurso('conferencias_galpao', itens.map(it => it.itemCodigo || it.codigo || it.nSerie));
     invalidateCache();
 
     res.json({
@@ -1745,6 +1951,8 @@ app.post('/api/galpao/dar-baixa-emc', (req, res) => {
     });
 
     runTx();
+    syncRecordToTurso('lotes_romaneio_emc', loteId);
+    syncBatchToTurso('conferencias_galpao', itemsToProcess.map(it => it.id));
     invalidateCache();
 
     res.json({
@@ -1785,6 +1993,7 @@ app.post('/api/galpao/excluir-item', (req, res) => {
     });
 
     runTx();
+    syncDeleteToTurso('conferencias_galpao', targetIds);
     invalidateCache();
 
     res.json({
@@ -1820,6 +2029,7 @@ app.post('/api/sistema/reset-conferencias', (req, res) => {
       db.prepare("DELETE FROM sqlite_sequence WHERE name IN ('conferencias_galpao', 'lotes_romaneio_emc')").run();
     } catch (e) {}
 
+    syncResetToTurso();
     invalidateCache();
 
     res.json({
@@ -1845,13 +2055,50 @@ app.get('/api/sistema/backup-db', (req, res) => {
   }
 });
 
-// Limpeza de cache de consultas em memória
-app.post('/api/sistema/limpar-cache', (req, res) => {
+// Limpeza de cache de consultas em memória e sincronização Turso Cloud
+app.post('/api/sistema/limpar-cache', async (req, res) => {
   try {
+    await syncFromTurso();
     invalidateCache();
     res.json({
       success: true,
-      message: 'Cache em memória invalidado com sucesso! Os dados foram recarregados a partir do banco de dados SQLite.'
+      message: 'Cache em memória invalidado e dados sincronizados com a nuvem Turso com sucesso!'
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Status da sincronização com Turso Cloud
+app.get('/api/sistema/turso-status', (req, res) => {
+  try {
+    const localGalpao = db.prepare("SELECT count(*) as c FROM conferencias_galpao").get().c;
+    const localLotes = db.prepare("SELECT count(*) as c FROM lotes_romaneio_emc").get().c;
+    res.json({
+      success: true,
+      connected: !!TURSO_URL && !!TURSO_TOKEN,
+      url: TURSO_URL,
+      status: lastTursoStatus,
+      lastSync: lastTursoSyncTime,
+      localGalpaoCount: localGalpao,
+      localLotesCount: localLotes
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Forçar sincronização imediata com Turso Cloud
+app.post('/api/sistema/turso-sync', async (req, res) => {
+  try {
+    await syncFromTurso();
+    const localGalpao = db.prepare("SELECT count(*) as c FROM conferencias_galpao").get().c;
+    res.json({
+      success: true,
+      message: 'Sincronização com Nuvem Turso concluída com sucesso!',
+      status: lastTursoStatus,
+      lastSync: lastTursoSyncTime,
+      localGalpaoCount: localGalpao
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -2502,6 +2749,9 @@ app.post('/api/romaneios/criar', (req, res) => {
     const loteId = info.lastInsertRowid;
     db.prepare("UPDATE conferencias_galpao SET lote_romaneio_id = ? WHERE lote_romaneio_id IS NULL AND status_etapa = 'aguardando_retirada_emc'").run(loteId);
 
+    syncRecordToTurso('lotes_romaneio_emc', loteId);
+    executeTurso("UPDATE conferencias_galpao SET lote_romaneio_id = ? WHERE lote_romaneio_id IS NULL AND status_etapa = 'aguardando_retirada_emc'", [loteId]).catch(console.error);
+
     res.json({
       success: true,
       message: `Romaneio ${num} gerado com sucesso com ${totalGeral} itens no galpão para devolução!`,
@@ -2585,4 +2835,10 @@ const HOST = '0.0.0.0';
 
 app.listen(PORT, HOST, () => {
   console.log(`[API Inventário EMC] Servidor ativo e pronto na porta ${PORT} (${HOST})`);
+  // Sincronização inicial com Turso Cloud
+  syncFromTurso().catch(e => console.error('[Turso startup error]:', e.message));
+  // Sincronização periódica a cada 5 minutos
+  setInterval(() => {
+    syncFromTurso().catch(e => console.error('[Turso periodic sync error]:', e.message));
+  }, 5 * 60 * 1000);
 });
