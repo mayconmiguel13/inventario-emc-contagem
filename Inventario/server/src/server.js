@@ -1192,6 +1192,9 @@ app.post('/api/conciliacao/upload', async (req, res) => {
     let localidade = localidadeFallback || 'Galpão Central';
     let dataColeta = new Date().toLocaleString('pt-BR');
     let currentTipo = tipoForcado || 'CPU';
+    let isQRbotCSV = false;
+    let isColetorTxt = false;
+    let origemRegistro = (items && Array.isArray(items) && items.length > 0) ? 'coletor_mobile' : 'lista_texto';
     const itemsToProcess = [];
 
     if (items && Array.isArray(items) && items.length > 0) {
@@ -1205,10 +1208,11 @@ app.post('/api/conciliacao/upload', async (req, res) => {
       }
     } else {
       const lines = rawText.split(/\r?\n/);
-      const isQRbotCSV = lines.some(l => l.includes('CODECONTENT') || l.includes('CODETYPE'));
-      const isColetorTxt = lines.some(l => l.includes('RELATÓRIO DE COLETA') || l.includes('CPUS (') || l.includes('MONITORES ('));
+      isQRbotCSV = lines.some(l => l.includes('CODECONTENT') || l.includes('CODETYPE'));
+      isColetorTxt = lines.some(l => l.includes('RELATÓRIO DE COLETA') || l.includes('CPUS (') || l.includes('MONITORES ('));
 
       if (isColetorTxt) {
+        origemRegistro = 'arquivo_txt';
         for (const line of lines) {
           const trimmed = line.trim();
           if (trimmed.startsWith('Localidade:')) {
@@ -1227,6 +1231,7 @@ app.post('/api/conciliacao/upload', async (req, res) => {
           }
         }
       } else if (isQRbotCSV) {
+        origemRegistro = 'arquivo_csv';
         for (const line of lines) {
           if (!line.trim() || line.startsWith('DATE')) continue;
           const cols = line.split(',');
@@ -1242,6 +1247,7 @@ app.post('/api/conciliacao/upload', async (req, res) => {
           }
         }
       } else {
+        origemRegistro = 'lista_texto';
         for (const line of lines) {
           let trimmed = line.trim().replace(/^-\s*/, '');
           if (!trimmed || trimmed.startsWith('#') || trimmed.length < 3) continue;
@@ -1358,14 +1364,14 @@ app.post('/api/conciliacao/upload', async (req, res) => {
           updateStmt.run(
             normCode, item.tipo, localidade, status, rowId, contratoId,
             secPrevista, servidorPrevisto,
-            isColetorTxt ? 'arquivo_txt' : (isQRbotCSV ? 'arquivo_csv' : 'lista_texto'),
+            origemRegistro,
             nomeArquivo || 'upload_manual', item.hora, obs, existing.id
           );
         } else {
           insertStmt.run(
             rawCode, normCode, item.tipo, localidade, status, rowId, contratoId,
             secPrevista, localidade, servidorPrevisto,
-            isColetorTxt ? 'arquivo_txt' : (isQRbotCSV ? 'arquivo_csv' : 'lista_texto'),
+            origemRegistro,
             nomeArquivo || 'upload_manual', item.hora, obs
           );
         }
