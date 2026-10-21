@@ -1535,7 +1535,7 @@ function playScannerSound(type = 'success') {
   } catch (e) {}
 }
 
-// Analisador inteligente de código de barras para equipamentos da Prefeitura / EMC (Dell)
+// Analisador inteligente e rigoroso de código de barras para equipamentos da Prefeitura / EMC (Dell)
 function parseEmcBarcode(rawCode) {
   if (!rawCode) return { valid: false, reason: 'empty', message: 'Código vazio.' };
 
@@ -1544,13 +1544,13 @@ function parseEmcBarcode(rawCode) {
   // 1. Remover prefixos de leitura comuns: EMC, PATRIMONIO, PAT
   clean = clean.replace(/^(EMC|PATRIMONIO|PAT)[\s\-_.:]*/i, '').trim();
 
-  // 2. Telefone impresso no topo da etiqueta branca EMC: (31) 21212121
+  // 2. Telefone impresso no cabeçalho da etiqueta branca EMC: (31) 21212121
   const onlyDigits = clean.replace(/\D/g, '');
   if (onlyDigits === '21212121' || onlyDigits === '3121212121') {
     return {
       valid: false,
       reason: 'phone',
-      message: 'Telefone da EMC (21212121) ignorado. Aponte para o código de barras abaixo!'
+      message: 'Telefone da EMC (21212121) ignorado. Foque nas barras pretas do código!'
     };
   }
 
@@ -1559,7 +1559,7 @@ function parseEmcBarcode(rawCode) {
     return {
       valid: false,
       reason: 'express_code',
-      message: `Express Service Code (${clean}) descartado. Foque na etiqueta branca de Patrimônio EMC!`
+      message: `Express Service Code (${clean}) descartado. Foque na etiqueta branca EMC!`
     };
   }
 
@@ -1585,31 +1585,10 @@ function parseEmcBarcode(rawCode) {
     };
   }
 
-  // 6. Tentar extrair patrimônio de 5 ou 6 dígitos contido no texto lido
-  const matchEmc = clean.match(/\b(1\d{5}|\d{5,6})\b/);
-  if (matchEmc) {
-    return {
-      valid: true,
-      code: matchEmc[1],
-      type: 'patrimonio',
-      label: 'Patrimônio EMC',
-      isOfficial: true
-    };
-  }
-
-  // 7. Códigos curtos demais (< 5 caracteres)
-  if (clean.length < 5) {
-    return {
-      valid: false,
-      reason: 'too_short',
-      message: `Código lido (${clean}) muito curto. Foque na etiqueta branca EMC.`
-    };
-  }
-
   return {
     valid: false,
     reason: 'unrecognized',
-    message: `Código lido (${clean}) não é um patrimônio EMC padrão (deve ter 5 ou 6 dígitos).`
+    message: `Código lido (${clean}) descartado. O patrimônio oficial EMC possui 5 ou 6 dígitos.`
   };
 }
 
@@ -1656,6 +1635,7 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
   const html5QrCodeRef = useRef(null);
   const lastScannedCodeRef = useRef('');
   const lastScannedTimeRef = useRef(0);
+  const candidateRef = useRef({ code: '', count: 0, time: 0 }); // Filtro de consenso duplo
   const isProcessingRef = useRef(false);
   const sessionScansRef = useRef(sessionScans);
   sessionScansRef.current = sessionScans;
@@ -1719,7 +1699,9 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
       tipoEtiqueta: parseResult.label || 'Patrimônio EMC',
       isOfficial: !!parseResult.isOfficial,
       localidade: localidade || 'Galpão Central',
-      timestamp: nowTime
+      timestamp: nowTime,
+      descricao: 'Consultando base contratual...',
+      status: 'verificando'
     };
 
     setLastScanResult(newItem);
@@ -1728,6 +1710,67 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
 
     // Adiciona à lista de conferência local da sessão
     setSessionScans((prev) => [newItem, ...prev]);
+
+    // Consulta instantânea em background na base contratual da EMC (leitura pura em memória, 0ms)
+    fetch(`${API_BASE}/conciliacao/consultar?codigo=${encodeURIComponent(clean)}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.success && json.encontrado) {
+          const desc = json.descricao || (json.noContrato ? 'Ativo Oficial Contrato EMC' : 'Equipamento Localizado');
+          setSessionScans((prev) =>
+            prev.map((s) =>
+              s.id === newItem.id
+                ? {
+                    ...s,
+                    descricao: desc,
+                    tipo: json.tipo || s.tipo,
+                    status: json.status,
+                    secretariaPrevista: json.secretaria,
+                    servidorPrevisto: json.servidor,
+                    noContrato: json.noContrato
+                  }
+                : s
+            )
+          );
+          setLastScanResult((curr) =>
+            curr && curr.id === newItem.id
+              ? {
+                  ...curr,
+                  descricao: desc,
+                  tipo: json.tipo || curr.tipo,
+                  status: json.status,
+                  secretariaPrevista: json.secretaria,
+                  servidorPrevisto: json.servidor,
+                  noContrato: json.noContrato
+                }
+              : curr
+          );
+        } else {
+          setSessionScans((prev) =>
+            prev.map((s) =>
+              s.id === newItem.id
+                ? {
+                    ...s,
+                    descricao: 'Não localizado no contrato EMC (Excedente)',
+                    status: 'excedente',
+                    noContrato: false
+                  }
+                : s
+            )
+          );
+          setLastScanResult((curr) =>
+            curr && curr.id === newItem.id
+              ? {
+                  ...curr,
+                  descricao: 'Não localizado no contrato EMC (Excedente)',
+                  status: 'excedente',
+                  noContrato: false
+                }
+              : curr
+          );
+        }
+      })
+      .catch(() => {});
   };
 
   const onBarcodeDetected = (decodedText) => {
@@ -1759,11 +1802,27 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
 
     const clean = parseResult.code;
 
-    // Cooldown de 4 segundos para o MESMO código evitando disparo contínuo pela câmera
-    if (clean === lastScannedCodeRef.current && (now - lastScannedTimeRef.current < 4000)) {
+    // Cooldown de 3.5 segundos para o MESMO código já confirmado
+    if (clean === lastScannedCodeRef.current && (now - lastScannedTimeRef.current < 3500)) {
       return;
     }
 
+    // 2. Filtro de Consenso Duplo (Anti-Falso Positivo):
+    // Exige 2 detecções idênticas consecutivas na janela de 500ms para confirmar o código
+    const cand = candidateRef.current;
+    if (cand.code === clean && (now - cand.time < 500)) {
+      cand.count += 1;
+    } else {
+      candidateRef.current = { code: clean, count: 1, time: now };
+      return; // Aguarda 2º frame consecutivo de confirmação
+    }
+
+    if (cand.count < 2) {
+      return;
+    }
+
+    // Confirmado com 2 frames idênticos!
+    candidateRef.current = { code: '', count: 0, time: 0 };
     lastScannedCodeRef.current = clean;
     lastScannedTimeRef.current = now;
 
@@ -1778,20 +1837,12 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
         await html5QrCodeRef.current.stop();
       }
 
-      // Scanner com aceleração por hardware nativo (Chrome/Android NPU) e suporte a todos os formatos de patrimônio
+      // Scanner de alta precisão focado estritamente em CODE_128 (elimina leituras parciais de ITF/Codabar)
       const scanner = new Html5Qrcode("camera-reader", {
         formatsToSupport: [
           Html5QrcodeSupportedFormats.CODE_128,
           Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.CODE_93,
-          Html5QrcodeSupportedFormats.ITF,
-          Html5QrcodeSupportedFormats.CODABAR,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8,
-          Html5QrcodeSupportedFormats.UPC_A,
-          Html5QrcodeSupportedFormats.UPC_E,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.DATA_MATRIX
+          Html5QrcodeSupportedFormats.QR_CODE
         ],
         verbose: false,
         experimentalFeatures: {
@@ -1802,21 +1853,25 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
 
       const cameraConfig = camId ? camId : { facingMode: "environment" };
 
-      // Alta Resolução (Full HD) + 12 FPS otimizado para foco contínuo + Mira retangular
+      // Resolução HD 720p otimizada para macro focus rápido + Mira quadrada que lê na horizontal e vertical
       await scanner.start(
         cameraConfig,
         {
-          fps: 12, // 12 FPS dá tempo ao sensor para focar com nitidez sem sobrecarregar a CPU
-          qrbox: (viewfinderWidth, viewfinderHeight) => ({
-            width: Math.min(Math.floor(viewfinderWidth * 0.90), 420),
-            height: Math.min(Math.floor(viewfinderHeight * 0.42), 190)
-          }),
-          aspectRatio: 1.333334,
+          fps: 15,
+          qrbox: (viewfinderWidth, viewfinderHeight) => {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const boxSize = Math.max(220, Math.min(Math.floor(minEdge * 0.82), 340));
+            return {
+              width: boxSize,
+              height: boxSize
+            };
+          },
+          aspectRatio: 1.0,
           videoConstraints: {
             facingMode: { ideal: "environment" },
-            focusMode: { ideal: "continuous" },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            width: { ideal: 1280, min: 640 },
+            height: { ideal: 720, min: 480 },
+            focusMode: { ideal: "continuous" }
           }
         },
         onBarcodeDetected,
@@ -2270,37 +2325,63 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
                 )}
               </div>
 
-              {/* Guia Laser Visual para Alinhamento de Código de Barras */}
+              {/* Mira Óptica com Retículo de 4 Cantos e Guias Horizontal + Vertical */}
               {isScanning && (
                 <div
+                  className="position-absolute top-50 start-50 translate-middle pointer-events-none"
                   style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '5%',
-                    right: '5%',
-                    height: '2px',
-                    background: 'linear-gradient(90deg, transparent, rgba(239, 68, 68, 0.95), transparent)',
-                    boxShadow: '0 0 10px rgba(239, 68, 68, 0.9)',
-                    transform: 'translateY(-50%)',
-                    pointerEvents: 'none',
-                    zIndex: 4
+                    width: '240px',
+                    height: '240px',
+                    border: '1.5px dashed rgba(255, 255, 255, 0.45)',
+                    borderRadius: '16px',
+                    zIndex: 4,
+                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.38)'
                   }}
                 >
+                  {/* Cantos de Enquadramento */}
+                  <div style={{ position: 'absolute', top: '-2px', left: '-2px', width: '22px', height: '22px', borderTop: '4px solid #10b981', borderLeft: '4px solid #10b981', borderTopLeftRadius: '14px' }}></div>
+                  <div style={{ position: 'absolute', top: '-2px', right: '-2px', width: '22px', height: '22px', borderTop: '4px solid #10b981', borderRight: '4px solid #10b981', borderTopRightRadius: '14px' }}></div>
+                  <div style={{ position: 'absolute', bottom: '-2px', left: '-2px', width: '22px', height: '22px', borderBottom: '4px solid #10b981', borderLeft: '4px solid #10b981', borderBottomLeftRadius: '14px' }}></div>
+                  <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', width: '22px', height: '22px', borderBottom: '4px solid #10b981', borderRight: '4px solid #10b981', borderBottomRightRadius: '14px' }}></div>
+
+                  {/* Guia Laser Horizontal */}
+                  <div style={{ position: 'absolute', top: '50%', left: '8px', right: '8px', height: '2px', background: 'rgba(239, 68, 68, 0.9)', boxShadow: '0 0 8px #ef4444' }}></div>
+
+                  {/* Guia Laser Vertical Central */}
+                  <div style={{ position: 'absolute', left: '50%', top: '8px', bottom: '8px', width: '1px', background: 'rgba(239, 68, 68, 0.45)' }}></div>
+
+                  {/* Dica de Enquadramento */}
                   <span
                     style={{
                       position: 'absolute',
-                      top: '-16px',
+                      top: '-22px',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      fontSize: '11px',
+                      color: '#34d399',
+                      fontWeight: 700,
+                      letterSpacing: '0.5px',
+                      whiteSpace: 'nowrap',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.95)'
+                    }}
+                  >
+                    FOQUE A ETIQUETA BRANCA EMC
+                  </span>
+
+                  <span
+                    style={{
+                      position: 'absolute',
+                      bottom: '6px',
                       left: '50%',
                       transform: 'translateX(-50%)',
                       fontSize: '10px',
-                      color: '#f87171',
-                      fontWeight: 700,
-                      letterSpacing: '0.8px',
-                      textShadow: '0 1px 3px rgba(0,0,0,0.95)',
-                      pointerEvents: 'none'
+                      color: 'rgba(255,255,255,0.85)',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.95)'
                     }}
                   >
-                    ALINHE A ETIQUETA BRANCA EMC
+                    Lê na Horizontal e Vertical
                   </span>
                 </div>
               )}
@@ -2520,9 +2601,15 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
                     <div className="text-muted fs-11">{lastScanResult.timestamp}</div>
                   </div>
                 </div>
+                {lastScanResult.descricao && (
+                  <div className="mt-2 pt-2 border-top fs-12 text-dark fw-semibold d-flex align-items-center gap-1">
+                    <i className="ri-computer-line text-primary fs-14"></i>
+                    <span>{lastScanResult.descricao}</span>
+                  </div>
+                )}
                 <div className="mt-2 pt-2 border-top d-flex align-items-center justify-content-between">
-                  <span className="badge badge-soft-success text-success fs-11">
-                    ✓ {lastScanResult.tipoEtiqueta || 'Patrimônio EMC'}
+                  <span className={`badge ${lastScanResult.noContrato ? 'badge-soft-success text-success' : 'badge-soft-warning text-dark'} fs-11`}>
+                    {lastScanResult.noContrato ? '✓ No Contrato EMC' : (lastScanResult.tipoEtiqueta || 'Patrimônio EMC')}
                   </span>
                   <span className="text-muted fs-11">
                     <i className="ri-map-pin-line me-1"></i> {lastScanResult.localidade || localidade}
@@ -2592,12 +2679,18 @@ function ColetorMobileView({ onUpdated, notify, onNavigate }) {
                             <span className="badge bg-soft-info text-info fs-10 fw-bold">
                               {s.tipo || 'CPU'}
                             </span>
-                            <span className="badge bg-soft-success text-success fs-10">
-                              {s.tipoEtiqueta || 'Patrimônio'}
+                            <span className={`badge ${s.noContrato ? 'badge-soft-success text-success' : 'badge-soft-secondary'} fs-10`}>
+                              {s.noContrato ? '✓ EMC' : (s.tipoEtiqueta || 'Patrimônio')}
                             </span>
                           </div>
+                          {s.descricao && (
+                            <div className="fs-12 text-dark fw-medium mt-1 text-truncate" style={{ maxWidth: '280px' }}>
+                              {s.descricao}
+                            </div>
+                          )}
                           <small className="text-muted fs-11 d-block">
                             <i className="ri-time-line me-1"></i>{s.timestamp} • {s.localidade || localidade}
+                            {s.secretariaPrevista ? ` • ${s.secretariaPrevista}` : ''}
                           </small>
                         </div>
                       </div>

@@ -1404,6 +1404,58 @@ app.post('/api/conciliacao/upload', async (req, res) => {
   }
 });
 
+// Consulta rápida em memória sem salvar nada no banco (usado pelo Coletor para identificar na hora)
+app.get('/api/conciliacao/consultar', (req, res) => {
+  try {
+    const rawCode = String(req.query.codigo || '').trim();
+    if (!rawCode) return res.status(400).json({ success: false, message: 'Código não informado.' });
+
+    const normCode = normalizeCode(rawCode);
+    const { contractByItem, contractBySerie, formByCode } = getLookupMaps();
+
+    const contractMatch = contractByItem.get(normCode) || contractBySerie.get(normCode);
+    const formMatch = formByCode.get(normCode);
+
+    if (contractMatch) {
+      return res.json({
+        success: true,
+        encontrado: true,
+        noContrato: true,
+        tipo: contractMatch.tipo || 'CPU',
+        descricao: contractMatch.descricao || 'Ativo Oficial Contrato EMC',
+        n_serie: contractMatch.n_serie,
+        item: contractMatch.item,
+        status: 'conforme',
+        secretaria: formMatch ? formMatch.data.Secretaria : null,
+        servidor: formMatch ? formMatch.data['Nome completo do servidor'] : null
+      });
+    }
+
+    if (formMatch) {
+      return res.json({
+        success: true,
+        encontrado: true,
+        noContrato: false,
+        tipo: 'CPU',
+        descricao: formMatch.data['Descrição do equipamento'] || 'Equipamento declarado em formulário',
+        status: 'deslocado',
+        secretaria: formMatch.data.Secretaria,
+        servidor: formMatch.data['Nome completo do servidor']
+      });
+    }
+
+    return res.json({
+      success: true,
+      encontrado: false,
+      noContrato: false,
+      status: 'excedente_novo',
+      descricao: 'Item não localizado no contrato EMC (Excedente)'
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Single Barcode Gun Scan (Galpão)
 app.post('/api/conciliacao/bipar', async (req, res) => {
   try {
