@@ -1183,65 +1183,81 @@ app.get('/api/dashboard/stats', (req, res) => {
 // ==========================================
 app.post('/api/conciliacao/upload', async (req, res) => {
   try {
-    const { rawText, localidadeFallback, nomeArquivo, tipoForcado } = req.body;
-    if (!rawText || typeof rawText !== 'string') {
-      return res.status(400).json({ success: false, message: 'Conteúdo do arquivo não fornecido.' });
+    const { rawText, localidadeFallback, nomeArquivo, tipoForcado, items } = req.body;
+    if ((!rawText || typeof rawText !== 'string') && (!items || !Array.isArray(items) || items.length === 0)) {
+      return res.status(400).json({ success: false, message: 'Conteúdo ou lista de itens não fornecido.' });
     }
 
     const { contractByItem, contractBySerie, formByCode } = getLookupMaps();
-    const lines = rawText.split(/\r?\n/);
-
     let localidade = localidadeFallback || 'Galpão Central';
     let dataColeta = new Date().toLocaleString('pt-BR');
     let currentTipo = tipoForcado || 'CPU';
-
     const itemsToProcess = [];
-    const isQRbotCSV = lines.some(l => l.includes('CODECONTENT') || l.includes('CODETYPE'));
-    const isColetorTxt = lines.some(l => l.includes('RELATÓRIO DE COLETA') || l.includes('CPUS (') || l.includes('MONITORES ('));
 
-    if (isColetorTxt) {
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('Localidade:')) {
-          localidade = trimmed.replace('Localidade:', '').trim();
-        } else if (trimmed.startsWith('Data:')) {
-          dataColeta = trimmed.replace('Data:', '').trim();
-        } else if (/^CPUS\s*\(/i.test(trimmed)) {
-          currentTipo = 'CPU';
-        } else if (/^MONITORES\s*\(/i.test(trimmed)) {
-          currentTipo = 'MONITOR';
-        } else if (/^NOTEBOOKS\s*\(/i.test(trimmed)) {
-          currentTipo = 'NOTEBOOK';
-        } else if (trimmed.startsWith('-')) {
-          const m = trimmed.match(/^-\s*([A-Za-z0-9_-]+)/);
-          if (m) itemsToProcess.push({ codigo: m[1].trim(), tipo: currentTipo, hora: dataColeta });
-        }
-      }
-    } else if (isQRbotCSV) {
-      for (const line of lines) {
-        if (!line.trim() || line.startsWith('DATE')) continue;
-        const cols = line.split(',');
-        if (cols.length >= 4) {
-          const datePart = cols[0].replace(/"/g, '').trim();
-          const namePart = cols[2] ? cols[2].replace(/"/g, '').toLowerCase() : '';
-          const codePart = cols[3] ? cols[3].replace(/"/g, '').trim() : '';
-          if (!codePart) continue;
-          let tipo = 'CPU';
-          if (namePart.includes('monitor')) tipo = 'MONITOR';
-          if (namePart.includes('note')) tipo = 'NOTEBOOK';
-          itemsToProcess.push({ codigo: codePart, tipo, hora: datePart });
-        }
+    if (items && Array.isArray(items) && items.length > 0) {
+      for (const it of items) {
+        if (!it) continue;
+        const code = typeof it === 'string' ? it : (it.codigo || it.code);
+        if (!code) continue;
+        const tipo = (typeof it === 'object' && it.tipo) ? it.tipo : currentTipo;
+        const hora = (typeof it === 'object' && (it.hora || it.timestamp)) ? (it.hora || it.timestamp) : dataColeta;
+        itemsToProcess.push({ codigo: String(code).trim(), tipo, hora });
       }
     } else {
-      for (const line of lines) {
-        const trimmed = line.trim().replace(/^-\s*/, '');
-        if (!trimmed || trimmed.startsWith('#') || trimmed.length < 3) continue;
-        let tipo = currentTipo;
-        if (/monitor/i.test(trimmed)) tipo = 'MONITOR';
-        if (/cpu/i.test(trimmed)) tipo = 'CPU';
-        if (/note/i.test(trimmed)) tipo = 'NOTEBOOK';
-        const m = trimmed.match(/([A-Za-z0-9_-]+)/);
-        if (m) itemsToProcess.push({ codigo: m[1].trim(), tipo, hora: dataColeta });
+      const lines = rawText.split(/\r?\n/);
+      const isQRbotCSV = lines.some(l => l.includes('CODECONTENT') || l.includes('CODETYPE'));
+      const isColetorTxt = lines.some(l => l.includes('RELATÓRIO DE COLETA') || l.includes('CPUS (') || l.includes('MONITORES ('));
+
+      if (isColetorTxt) {
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('Localidade:')) {
+            localidade = trimmed.replace('Localidade:', '').trim();
+          } else if (trimmed.startsWith('Data:')) {
+            dataColeta = trimmed.replace('Data:', '').trim();
+          } else if (/^CPUS\s*\(/i.test(trimmed)) {
+            currentTipo = 'CPU';
+          } else if (/^MONITORES\s*\(/i.test(trimmed)) {
+            currentTipo = 'MONITOR';
+          } else if (/^NOTEBOOKS\s*\(/i.test(trimmed)) {
+            currentTipo = 'NOTEBOOK';
+          } else if (trimmed.startsWith('-')) {
+            const m = trimmed.match(/^-\s*([A-Za-z0-9_-]+)/);
+            if (m) itemsToProcess.push({ codigo: m[1].trim(), tipo: currentTipo, hora: dataColeta });
+          }
+        }
+      } else if (isQRbotCSV) {
+        for (const line of lines) {
+          if (!line.trim() || line.startsWith('DATE')) continue;
+          const cols = line.split(',');
+          if (cols.length >= 4) {
+            const datePart = cols[0].replace(/"/g, '').trim();
+            const namePart = cols[2] ? cols[2].replace(/"/g, '').toLowerCase() : '';
+            const codePart = cols[3] ? cols[3].replace(/"/g, '').trim() : '';
+            if (!codePart) continue;
+            let tipo = 'CPU';
+            if (namePart.includes('monitor')) tipo = 'MONITOR';
+            if (namePart.includes('note')) tipo = 'NOTEBOOK';
+            itemsToProcess.push({ codigo: codePart, tipo, hora: datePart });
+          }
+        }
+      } else {
+        for (const line of lines) {
+          let trimmed = line.trim().replace(/^-\s*/, '');
+          if (!trimmed || trimmed.startsWith('#') || trimmed.length < 3) continue;
+          let tipo = currentTipo;
+          if (/^(monitor|cpu|notebook|outro)[\s:=-]+/i.test(trimmed)) {
+            const typeMatch = trimmed.match(/^(monitor|cpu|notebook|outro)/i);
+            if (typeMatch) tipo = typeMatch[1].toUpperCase();
+            trimmed = trimmed.replace(/^(monitor|cpu|notebook|outro)[\s:=-]+/i, '').trim();
+          } else {
+            if (/monitor/i.test(trimmed)) tipo = 'MONITOR';
+            if (/cpu/i.test(trimmed)) tipo = 'CPU';
+            if (/note/i.test(trimmed)) tipo = 'NOTEBOOK';
+          }
+          const m = trimmed.match(/([A-Za-z0-9_-]+)/);
+          if (m) itemsToProcess.push({ codigo: m[1].trim(), tipo, hora: dataColeta });
+        }
       }
     }
 
