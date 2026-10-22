@@ -1404,6 +1404,18 @@ app.post('/api/conciliacao/upload', async (req, res) => {
   }
 });
 
+// Retorna a lista compacta de todos os códigos de patrimônio e números de série do contrato EMC para validação instantânea no PWA
+app.get('/api/conciliacao/codigos-validos', (req, res) => {
+  try {
+    const { contractByItem, contractBySerie } = getLookupMaps();
+    const codes = Array.from(new Set([...contractByItem.keys(), ...contractBySerie.keys()]));
+    res.setHeader('Cache-Control', 'public, max-age=300'); // Cache de 5 min
+    res.json({ success: true, total: codes.length, codes });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Consulta rápida em memória sem salvar nada no banco (usado pelo Coletor para identificar na hora)
 app.get('/api/conciliacao/consultar', (req, res) => {
   try {
