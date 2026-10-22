@@ -2356,13 +2356,69 @@ function detectRegional(text) {
 
 app.get('/api/rotas/localidades', (req, res) => {
   try {
-    const { regional = '', secretaria = '', status = '', search = '' } = req.query;
+    const { regional = '', secretaria = '', secretarias = '', status = '', search = '' } = req.query;
     const cache = getCompiledEquipamentos();
-    const stopMap = new Map();
-
     const isCollected = (st) => st === 'no_galpao' || st === 'devolvido_emc';
 
+    // 1. Calcular estatísticas globais por secretaria (para o filtro ticar/selecionar com contadores)
+    const secStatsMap = new Map();
     for (const it of cache.items) {
+      const secName = (it.secretaria || 'NÃO INFORMADA').trim().toUpperCase();
+      if (!secStatsMap.has(secName)) {
+        secStatsMap.set(secName, {
+          nome: secName,
+          totalEquipamentos: 0,
+          totalRecolhidos: 0,
+          totalPendentes: 0,
+          localidadesSet: new Set()
+        });
+      }
+      const secStat = secStatsMap.get(secName);
+      const rawEnd = (it.endereco || '').trim();
+      if (rawEnd) secStat.localidadesSet.add(rawEnd.toLowerCase());
+
+      const countItem = (pat, st) => {
+        if (pat && pat !== '-') {
+          secStat.totalEquipamentos++;
+          if (isCollected(st)) secStat.totalRecolhidos++;
+          else secStat.totalPendentes++;
+        }
+      };
+      countItem(it.cpu, it.cpuStatus);
+      countItem(it.monitor, it.monitorStatus);
+      countItem(it.monitorAvulso, it.statusConferencia);
+      countItem(it.notebook, it.notebookStatus);
+    }
+
+    const secretariasDisponiveis = Array.from(secStatsMap.values())
+      .map(s => ({
+        nome: s.nome,
+        totalEquipamentos: s.totalEquipamentos,
+        totalRecolhidos: s.totalRecolhidos,
+        totalPendentes: s.totalPendentes,
+        totalLocalidades: s.localidadesSet.size
+      }))
+      .sort((a, b) => b.totalPendentes - a.totalPendentes);
+
+    // 2. Processar lista de secretarias selecionadas (suporta array ou string separada por vírgula)
+    let selectedSecretarias = [];
+    const rawSecs = secretarias || secretaria || '';
+    if (Array.isArray(rawSecs)) {
+      selectedSecretarias = rawSecs.map(s => String(s).trim().toUpperCase()).filter(Boolean);
+    } else if (typeof rawSecs === 'string' && rawSecs.trim()) {
+      selectedSecretarias = rawSecs.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    }
+
+    const filterBySec = selectedSecretarias.length > 0;
+    const stopMap = new Map();
+
+    for (const it of cache.items) {
+      const itSec = (it.secretaria || '').trim().toUpperCase();
+      // Se houver filtro de secretarias ativas, ignorar equipamentos de outras secretarias
+      if (filterBySec && !selectedSecretarias.includes(itSec)) {
+        continue;
+      }
+
       const rawEnd = (it.endereco || '').trim();
       const endClean = rawEnd || 'Endereço não informado';
       const key = endClean.toLowerCase();
@@ -2466,35 +2522,38 @@ app.get('/api/rotas/localidades', (req, res) => {
       }
     }
 
-    let stops = Array.from(stopMap.values()).map(s => {
-      const taxa = s.totalEquipamentos > 0 ? Math.round((s.totalRecolhidos / s.totalEquipamentos) * 100) : 0;
-      let statusLocalidade = 'pendente';
-      if (s.totalRecolhidos === s.totalEquipamentos && s.totalEquipamentos > 0) statusLocalidade = 'concluida';
-      else if (s.totalRecolhidos > 0) statusLocalidade = 'parcial';
+    let stops = Array.from(stopMap.values())
+      .filter(s => s.totalEquipamentos > 0)
+      .map(s => {
+        const taxa = s.totalEquipamentos > 0 ? Math.round((s.totalRecolhidos / s.totalEquipamentos) * 100) : 0;
+        let statusLocalidade = 'pendente';
+        if (s.totalRecolhidos === s.totalEquipamentos && s.totalEquipamentos > 0) statusLocalidade = 'concluida';
+        else if (s.totalRecolhidos > 0) statusLocalidade = 'parcial';
 
-      const contatosArr = Array.from(s.contatos.entries()).map(([nome, telefone]) => ({ nome, telefone }));
+        const contatosArr = Array.from(s.contatos.entries()).map(([nome, telefone]) => ({ nome, telefone }));
 
-      return {
-        id: s.id,
-        endereco: s.endereco,
-        regional: s.regional,
-        unidades: Array.from(s.unidades),
-        secretarias: Array.from(s.secretarias),
-        contatos: contatosArr,
-        totalEquipamentos: s.totalEquipamentos,
-        totalRecolhidos: s.totalRecolhidos,
-        totalPendentes: s.totalPendentes,
-        cpus: s.cpus,
-        monitores: s.monitores,
-        notebooks: s.notebooks,
-        taxaConclusao: taxa,
-        statusLocalidade,
-        mapsUrl: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.endereco)}`,
-        equipamentos: s.equipamentos
-      };
-    });
+        return {
+          id: s.id,
+          endereco: s.endereco,
+          regional: s.regional,
+          unidades: Array.from(s.unidades),
+          secretarias: Array.from(s.secretarias),
+          contatos: contatosArr,
+          totalEquipamentos: s.totalEquipamentos,
+          totalRecolhidos: s.totalRecolhidos,
+          totalPendentes: s.totalPendentes,
+          cpus: s.cpus,
+          monitores: s.monitores,
+          notebooks: s.notebooks,
+          taxaConclusao: taxa,
+          statusLocalidade,
+          mapsUrl: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.endereco)}`,
+          wazeUrl: `https://waze.com/ul?q=${encodeURIComponent(s.endereco)}&navigate=yes`,
+          equipamentos: s.equipamentos
+        };
+      });
 
-    // Global KPIs before filters
+    // KPIs calculados para as secretarias ativas
     const totalLocalidades = stops.length;
     const localidadesConcluidas = stops.filter(s => s.statusLocalidade === 'concluida').length;
     const localidadesParciais = stops.filter(s => s.statusLocalidade === 'parcial').length;
@@ -2504,12 +2563,9 @@ app.get('/api/rotas/localidades', (req, res) => {
     const totalPendentes = stops.reduce((acc, s) => acc + s.totalPendentes, 0);
     const taxaGeral = totalAtivos > 0 ? Math.round((totalRecolhidos / totalAtivos) * 100) : 0;
 
-    // Apply query filters
+    // Filtros de busca, regional e status
     if (regional) {
       stops = stops.filter(s => s.regional.toLowerCase() === regional.toLowerCase());
-    }
-    if (secretaria) {
-      stops = stops.filter(s => s.secretarias.some(sec => sec.toUpperCase() === secretaria.toUpperCase()));
     }
     if (status) {
       stops = stops.filter(s => s.statusLocalidade === status);
@@ -2526,7 +2582,7 @@ app.get('/api/rotas/localidades', (req, res) => {
       );
     }
 
-    // Default sort: more pending equipment first
+    // Ordenação padrão: mais equipamentos pendentes primeiro
     stops.sort((a, b) => b.totalPendentes - a.totalPendentes);
 
     res.json({
@@ -2542,7 +2598,8 @@ app.get('/api/rotas/localidades', (req, res) => {
         taxaGeral
       },
       regionaisDisponiveis: Object.keys(REGIONAL_TERMS_MAP),
-      secretariasDisponiveis: cache.secretariasDisponiveis,
+      secretariasDisponiveis,
+      selectedSecretarias,
       totalFiltrado: stops.length,
       localidades: stops
     });
