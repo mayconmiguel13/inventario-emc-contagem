@@ -2330,7 +2330,227 @@ app.get('/api/equipamentos', (req, res) => {
 });
 
 // ==========================================
-// 7. ITENS EXCEDENTES DE GALPÃO
+// ROTAS & LOGÍSTICA DE COLETA EM CAMPO
+// ==========================================
+const REGIONAL_TERMS_MAP = {
+  'Sede': ['sede', 'centro', 'camilo alves', 'fonte grande', 'bernardo monteiro', 'alvorada', 'betania', 'arcadia', 'tancredo neves', 'prefeitura', 'tres meninas', 'santa helena', 'europa', 'colonial', 'nossa senhora do carmo', 'santa terezinha', 'madalena', 'maria da conceicao'],
+  'Eldorado': ['eldorado', 'beatriz', 'cidade jardim', 'cinco', 'agua branca', 'bela vista', 'bandeirantes', 'sao joao', 'vila paris', 'joao cesar', 'gloria', 'eldoradinho', 'parque sao joao'],
+  'Industrial': ['industrial', 'amazonas', 'inconfidentes', 'sao paulo', 'itau', 'santa maria', 'jardim industrial'],
+  'Ressaca': ['ressaca', 'laguna', 'cabral', 'novo progresso', 'arvoredo', 'kennedy', 'oitis', 'ceasa', 'morada nova', 'sao joaquim'],
+  'Nacional': ['nacional', 'jardim alvorada', 'confisco', 'estrela dalva', 'sao mateus', 'pedra azul', 'amendoeiras', 'xangrila', 'tijuca', 'vale das amendoeiras'],
+  'Riacho': ['riacho', 'turista', 'monte castelo', 'riacho das pedras', 'jardim riacho'],
+  'Petrolândia': ['petrolandia', 'sapucaias', 'tropical', 'sao caetano', 'sao luiz', 'campo alto'],
+  'Vargem das Flores': ['vargem das flores', 'nova contagem', 'retiro', 'darcy ribeiro', 'ipiranga', 'estaleiro', 'tupis']
+};
+
+function detectRegional(text) {
+  const lower = String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (const [reg, terms] of Object.entries(REGIONAL_TERMS_MAP)) {
+    for (const t of terms) {
+      const termNorm = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (lower.includes(termNorm)) return reg;
+    }
+  }
+  return 'Sede';
+}
+
+app.get('/api/rotas/localidades', (req, res) => {
+  try {
+    const { regional = '', secretaria = '', status = '', search = '' } = req.query;
+    const cache = getCompiledEquipamentos();
+    const stopMap = new Map();
+
+    const isCollected = (st) => st === 'no_galpao' || st === 'devolvido_emc';
+
+    for (const it of cache.items) {
+      const rawEnd = (it.endereco || '').trim();
+      const endClean = rawEnd || 'Endereço não informado';
+      const key = endClean.toLowerCase();
+
+      if (!stopMap.has(key)) {
+        const detectedReg = detectRegional(endClean + ' ' + (it.unidade || ''));
+        stopMap.set(key, {
+          id: `stop_${Math.abs(key.split('').reduce((a, b) => ((a << 5) - a) + b.charCodeAt(0), 0))}`,
+          endereco: endClean,
+          regional: detectedReg,
+          unidades: new Set(),
+          secretarias: new Set(),
+          contatos: new Map(),
+          totalEquipamentos: 0,
+          totalRecolhidos: 0,
+          totalPendentes: 0,
+          cpus: 0,
+          monitores: 0,
+          notebooks: 0,
+          equipamentos: []
+        });
+      }
+
+      const stop = stopMap.get(key);
+      if (it.unidade) stop.unidades.add(it.unidade.trim());
+      if (it.secretaria) stop.secretarias.add(it.secretaria.trim());
+      if (it.servidor) {
+        stop.contatos.set(it.servidor.trim(), it.telefone ? it.telefone.trim() : '');
+      }
+
+      if (it.cpu && it.cpu !== '-') {
+        const col = isCollected(it.cpuStatus);
+        stop.totalEquipamentos++;
+        stop.cpus++;
+        if (col) stop.totalRecolhidos++; else stop.totalPendentes++;
+        stop.equipamentos.push({
+          id: `${it.id}_cpu`,
+          tipo: 'CPU',
+          patrimonio: it.cpu,
+          servidor: it.servidor,
+          matricula: it.matricula,
+          secretaria: it.secretaria,
+          unidade: it.unidade,
+          status: it.cpuStatus || 'pendente',
+          comprovante: it.comprovanteBaixa
+        });
+      }
+
+      if (it.monitor && it.monitor !== '-') {
+        const col = isCollected(it.monitorStatus);
+        stop.totalEquipamentos++;
+        stop.monitores++;
+        if (col) stop.totalRecolhidos++; else stop.totalPendentes++;
+        stop.equipamentos.push({
+          id: `${it.id}_mon`,
+          tipo: 'MONITOR',
+          patrimonio: it.monitor,
+          servidor: it.servidor,
+          matricula: it.matricula,
+          secretaria: it.secretaria,
+          unidade: it.unidade,
+          status: it.monitorStatus || 'pendente',
+          comprovante: it.comprovanteBaixa
+        });
+      }
+
+      if (it.monitorAvulso && it.monitorAvulso !== '-') {
+        const col = isCollected(it.statusConferencia);
+        stop.totalEquipamentos++;
+        stop.monitores++;
+        if (col) stop.totalRecolhidos++; else stop.totalPendentes++;
+        stop.equipamentos.push({
+          id: `${it.id}_mon_av`,
+          tipo: 'MONITOR AVULSO',
+          patrimonio: it.monitorAvulso,
+          servidor: it.servidor,
+          matricula: it.matricula,
+          secretaria: it.secretaria,
+          unidade: it.unidade,
+          status: it.statusConferencia || 'pendente',
+          comprovante: it.comprovanteBaixa
+        });
+      }
+
+      if (it.notebook && it.notebook !== '-') {
+        const col = isCollected(it.notebookStatus);
+        stop.totalEquipamentos++;
+        stop.notebooks++;
+        if (col) stop.totalRecolhidos++; else stop.totalPendentes++;
+        stop.equipamentos.push({
+          id: `${it.id}_not`,
+          tipo: 'NOTEBOOK',
+          patrimonio: it.notebook,
+          servidor: it.servidor,
+          matricula: it.matricula,
+          secretaria: it.secretaria,
+          unidade: it.unidade,
+          status: it.notebookStatus || 'pendente',
+          comprovante: it.comprovanteBaixa
+        });
+      }
+    }
+
+    let stops = Array.from(stopMap.values()).map(s => {
+      const taxa = s.totalEquipamentos > 0 ? Math.round((s.totalRecolhidos / s.totalEquipamentos) * 100) : 0;
+      let statusLocalidade = 'pendente';
+      if (s.totalRecolhidos === s.totalEquipamentos && s.totalEquipamentos > 0) statusLocalidade = 'concluida';
+      else if (s.totalRecolhidos > 0) statusLocalidade = 'parcial';
+
+      const contatosArr = Array.from(s.contatos.entries()).map(([nome, telefone]) => ({ nome, telefone }));
+
+      return {
+        id: s.id,
+        endereco: s.endereco,
+        regional: s.regional,
+        unidades: Array.from(s.unidades),
+        secretarias: Array.from(s.secretarias),
+        contatos: contatosArr,
+        totalEquipamentos: s.totalEquipamentos,
+        totalRecolhidos: s.totalRecolhidos,
+        totalPendentes: s.totalPendentes,
+        cpus: s.cpus,
+        monitores: s.monitores,
+        notebooks: s.notebooks,
+        taxaConclusao: taxa,
+        statusLocalidade,
+        mapsUrl: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(s.endereco)}`,
+        equipamentos: s.equipamentos
+      };
+    });
+
+    // Global KPIs before filters
+    const totalLocalidades = stops.length;
+    const localidadesConcluidas = stops.filter(s => s.statusLocalidade === 'concluida').length;
+    const localidadesParciais = stops.filter(s => s.statusLocalidade === 'parcial').length;
+    const localidadesPendentes = stops.filter(s => s.statusLocalidade === 'pendente').length;
+    const totalAtivos = stops.reduce((acc, s) => acc + s.totalEquipamentos, 0);
+    const totalRecolhidos = stops.reduce((acc, s) => acc + s.totalRecolhidos, 0);
+    const totalPendentes = stops.reduce((acc, s) => acc + s.totalPendentes, 0);
+    const taxaGeral = totalAtivos > 0 ? Math.round((totalRecolhidos / totalAtivos) * 100) : 0;
+
+    // Apply query filters
+    if (regional) {
+      stops = stops.filter(s => s.regional.toLowerCase() === regional.toLowerCase());
+    }
+    if (secretaria) {
+      stops = stops.filter(s => s.secretarias.some(sec => sec.toUpperCase() === secretaria.toUpperCase()));
+    }
+    if (status) {
+      stops = stops.filter(s => s.statusLocalidade === status);
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      stops = stops.filter(s =>
+        s.endereco.toLowerCase().includes(q) ||
+        s.regional.toLowerCase().includes(q) ||
+        s.unidades.some(u => u.toLowerCase().includes(q)) ||
+        s.secretarias.some(sec => sec.toLowerCase().includes(q)) ||
+        s.contatos.some(c => c.nome.toLowerCase().includes(q)) ||
+        s.equipamentos.some(e => String(e.patrimonio || '').toLowerCase().includes(q))
+      );
+    }
+
+    // Default sort: more pending equipment first
+    stops.sort((a, b) => b.totalPendentes - a.totalPendentes);
+
+    res.json({
+      success: true,
+      kpis: {
+        totalLocalidades,
+        localidadesConcluidas,
+        localidadesParciais,
+        localidadesPendentes,
+        totalAtivos,
+        totalRecolhidos,
+        totalPendentes,
+        taxaGeral
+      },
+      regionaisDisponiveis: Object.keys(REGIONAL_TERMS_MAP),
+      secretariasDisponiveis: cache.secretariasDisponiveis,
+      totalFiltrado: stops.length,
+      localidades: stops
+    });
+  } catch (err) {
+    console.error('Erro em /api/rotas/localidades:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 // ==========================================
 app.get('/api/excedentes', (req, res) => {
   try {
