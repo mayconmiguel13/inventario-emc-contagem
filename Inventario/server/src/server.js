@@ -415,6 +415,17 @@ function normalizeCode(raw) {
   return cleanAssetCode(raw).toUpperCase();
 }
 
+// Helper para deduzir o tipo de hardware com base na descrição ou tipo_estimado do contrato EMC
+function deduceContractType(contractMatch) {
+  if (!contractMatch) return null;
+  const desc = String(contractMatch.descricao || '').toUpperCase();
+  const tipoEst = String(contractMatch.tipo_estimado || '').toUpperCase();
+  if (desc.includes('MONITOR') || tipoEst.includes('MONITOR')) return 'MONITOR';
+  if (desc.includes('NOTEBOOK') || desc.includes('LAPTOP') || tipoEst.includes('NOTEBOOK')) return 'NOTEBOOK';
+  if (desc.includes('DESKTOP') || desc.includes('CPU') || desc.includes('COMPUTADOR') || tipoEst.includes('CPU')) return 'CPU';
+  return tipoEst || null;
+}
+
 function getLookupMaps() {
   if (cachedBase) {
     return cachedBase;
@@ -462,24 +473,25 @@ function getLookupMaps() {
   const formByCode = new Map();
   const parsedFormRows = [];
 
-  function registerFormKey(key, rowObj) {
+  function registerFormKey(key, rowObj, tipo) {
     if (!key) return;
     const raw = String(key).trim();
     if (!raw || isJunkCodeText(raw)) return;
     const str = cleanAssetCode(raw).toUpperCase();
     if (!str || isJunkCodeText(str) || str === '-' || str === 'NULL' || str === 'INDEFINIDO') return;
 
-    formByCode.set(str, rowObj);
+    const entry = Object.assign(Object.create(rowObj), { tipo: tipo || 'CPU' });
+    formByCode.set(str, entry);
     if (str.length === 6 && str.startsWith('1')) {
-      formByCode.set(str.substring(1), rowObj);
-      formByCode.set('1000' + str.substring(1), rowObj);
+      formByCode.set(str.substring(1), entry);
+      formByCode.set('1000' + str.substring(1), entry);
     } else if (str.length === 5) {
-      formByCode.set('1' + str, rowObj);
-      formByCode.set('1000' + str, rowObj);
+      formByCode.set('1' + str, entry);
+      formByCode.set('1000' + str, entry);
     } else if (str.startsWith('1000') && str.length === 9) {
       const suffix = str.substring(4);
-      formByCode.set(suffix, rowObj);
-      formByCode.set('1' + suffix, rowObj);
+      formByCode.set(suffix, entry);
+      formByCode.set('1' + suffix, entry);
     }
   }
 
@@ -503,10 +515,10 @@ function getLookupMaps() {
       };
       parsedFormRows.push(rowObj);
 
-      registerFormKey(rowObj.cpu, rowObj);
-      registerFormKey(rowObj.notebook, rowObj);
-      registerFormKey(rowObj.monitor, rowObj);
-      registerFormKey(rowObj.monitorAvulso, rowObj);
+      registerFormKey(rowObj.cpu, rowObj, 'CPU');
+      registerFormKey(rowObj.notebook, rowObj, 'NOTEBOOK');
+      registerFormKey(rowObj.monitor, rowObj, 'MONITOR');
+      registerFormKey(rowObj.monitorAvulso, rowObj, 'MONITOR');
     } catch (e) {}
   }
 
@@ -1328,11 +1340,16 @@ app.post('/api/conciliacao/upload', async (req, res) => {
         const contractMatch = contractByItem.get(normCode) || contractBySerie.get(normCode);
         const formMatch = formByCode.get(normCode);
 
+        // Deduz tipo real a partir do contrato oficial ou do formulário
+        const contractType = deduceContractType(contractMatch);
+        const formType = formMatch ? formMatch.tipo : null;
+        const itemTipo = contractType || formType || item.tipo || 'CPU';
+
         let status = 'excedente_novo';
         let rowId = formMatch ? formMatch.id : null;
         let contratoId = contractMatch ? contractMatch.id : null;
-        let secPrevista = formMatch ? formMatch.data.Secretaria : null;
-        let servidorPrevisto = formMatch ? formMatch.data['Nome completo do servidor'] : null;
+        let secPrevista = formMatch ? (formMatch.secretaria || formMatch.data?.Secretaria) : null;
+        let servidorPrevisto = formMatch ? (formMatch.servidor || formMatch.data?.['Nome completo do servidor']) : null;
         let obs = '';
 
         if (formMatch) {
@@ -1362,14 +1379,14 @@ app.post('/api/conciliacao/upload', async (req, res) => {
         const existing = checkExistingStmt.get(rawCode, normCode);
         if (existing) {
           updateStmt.run(
-            normCode, item.tipo, localidade, status, rowId, contratoId,
+            normCode, itemTipo, localidade, status, rowId, contratoId,
             secPrevista, servidorPrevisto,
             origemRegistro,
             nomeArquivo || 'upload_manual', item.hora, obs, existing.id
           );
         } else {
           insertStmt.run(
-            rawCode, normCode, item.tipo, localidade, status, rowId, contratoId,
+            rawCode, normCode, itemTipo, localidade, status, rowId, contratoId,
             secPrevista, localidade, servidorPrevisto,
             origemRegistro,
             nomeArquivo || 'upload_manual', item.hora, obs
@@ -1378,7 +1395,7 @@ app.post('/api/conciliacao/upload', async (req, res) => {
 
         results.detalhes.push({
           codigo: rawCode,
-          tipo: item.tipo,
+          tipo: itemTipo,
           status,
           secretariaPrevista: secPrevista,
           localidadeColeta: localidade,
@@ -1429,17 +1446,18 @@ app.get('/api/conciliacao/consultar', (req, res) => {
     const formMatch = formByCode.get(normCode);
 
     if (contractMatch) {
+      const tipoDeduzido = deduceContractType(contractMatch) || (formMatch ? formMatch.tipo : null) || 'CPU';
       return res.json({
         success: true,
         encontrado: true,
         noContrato: true,
-        tipo: contractMatch.tipo || 'CPU',
+        tipo: tipoDeduzido,
         descricao: contractMatch.descricao || 'Ativo Oficial Contrato EMC',
         n_serie: contractMatch.n_serie,
         item: contractMatch.item,
         status: 'conforme',
-        secretaria: formMatch ? formMatch.data.Secretaria : null,
-        servidor: formMatch ? formMatch.data['Nome completo do servidor'] : null
+        secretaria: formMatch ? (formMatch.secretaria || formMatch.data?.Secretaria) : null,
+        servidor: formMatch ? (formMatch.servidor || formMatch.data?.['Nome completo do servidor']) : null
       });
     }
 
@@ -1448,11 +1466,11 @@ app.get('/api/conciliacao/consultar', (req, res) => {
         success: true,
         encontrado: true,
         noContrato: false,
-        tipo: 'CPU',
-        descricao: formMatch.data['Descrição do equipamento'] || 'Equipamento declarado em formulário',
+        tipo: formMatch.tipo || 'CPU',
+        descricao: formMatch.data?.['Descrição do equipamento'] || `${formMatch.tipo || 'Equipamento'} declarado em formulário`,
         status: 'deslocado',
-        secretaria: formMatch.data.Secretaria,
-        servidor: formMatch.data['Nome completo do servidor']
+        secretaria: formMatch.secretaria || formMatch.data?.Secretaria,
+        servidor: formMatch.servidor || formMatch.data?.['Nome completo do servidor']
       });
     }
 
@@ -1476,18 +1494,21 @@ app.post('/api/conciliacao/bipar', async (req, res) => {
 
     const rawCode = String(codigo).trim();
     const normCode = normalizeCode(rawCode);
-    const tipoItem = tipo || 'CPU';
     const local = localidade || 'Galpão Central';
 
     const { contractByItem, contractBySerie, formByCode } = getLookupMaps();
     const contractMatch = contractByItem.get(normCode) || contractBySerie.get(normCode);
     const formMatch = formByCode.get(normCode);
 
+    const contractType = deduceContractType(contractMatch);
+    const formType = formMatch ? formMatch.tipo : null;
+    const tipoItem = contractType || formType || tipo || 'CPU';
+
     let status = 'excedente_novo';
     let rowId = formMatch ? formMatch.id : null;
     let contratoId = contractMatch ? contractMatch.id : null;
-    let secPrevista = formMatch ? formMatch.data.Secretaria : null;
-    let servidorPrevisto = formMatch ? formMatch.data['Nome completo do servidor'] : null;
+    let secPrevista = formMatch ? (formMatch.secretaria || formMatch.data?.Secretaria) : null;
+    let servidorPrevisto = formMatch ? (formMatch.servidor || formMatch.data?.['Nome completo do servidor']) : null;
     let obs = '';
 
     if (formMatch) {
@@ -1509,11 +1530,12 @@ app.post('/api/conciliacao/bipar', async (req, res) => {
         UPDATE conferencias_galpao SET
           status_etapa = 'aguardando_retirada_emc',
           status_conciliacao = ?,
+          tipo_equipamento = ?,
           localidade_coletada = ?,
           data_hora_coleta = datetime('now', 'localtime'),
           observacao = ?
         WHERE id = ?
-      `).run(status, local, obs, existing.id);
+      `).run(status, tipoItem, local, obs, existing.id);
       recordId = existing.id;
     } else {
       const ins = db.prepare(`
@@ -1549,6 +1571,25 @@ app.post('/api/conciliacao/bipar', async (req, res) => {
     });
   } catch (err) {
     console.error('Error bipar:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Endpoint para correção rápida de tipo de equipamento no Galpão
+app.post('/api/galpao/editar-tipo', async (req, res) => {
+  try {
+    const { id, tipo } = req.body;
+    if (!id || !tipo) return res.status(400).json({ success: false, message: 'ID e tipo são obrigatórios.' });
+    const validTipo = String(tipo).trim().toUpperCase();
+    if (!['CPU', 'MONITOR', 'NOTEBOOK', 'OUTRO'].includes(validTipo)) {
+      return res.status(400).json({ success: false, message: 'Tipo inválido. Use CPU, MONITOR ou NOTEBOOK.' });
+    }
+    db.prepare("UPDATE conferencias_galpao SET tipo_equipamento = ? WHERE id = ?").run(validTipo, id);
+    await executeTurso("UPDATE conferencias_galpao SET tipo_equipamento = ? WHERE id = ?", [validTipo, id]);
+    invalidateCache();
+    res.json({ success: true, message: `Tipo atualizado para ${validTipo} com sucesso!` });
+  } catch (err) {
+    console.error('Error editar-tipo:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
