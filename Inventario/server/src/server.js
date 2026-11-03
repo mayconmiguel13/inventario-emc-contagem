@@ -2397,7 +2397,8 @@ function detectRegional(text) {
 
 app.get('/api/rotas/localidades', (req, res) => {
   try {
-    const { regional = '', secretaria = '', secretarias = '', status = '', search = '' } = req.query;
+    const { regional = '', secretaria = '', secretarias = '', status = '', search = '', hideNotebooks = '' } = req.query;
+    const shouldHideNotebooks = hideNotebooks === 'true' || hideNotebooks === '1' || req.query.ocultarNotebooks === 'true';
     const cache = getCompiledEquipamentos();
     const isCollected = (st) => st === 'no_galpao' || st === 'devolvido_emc';
 
@@ -2428,7 +2429,9 @@ app.get('/api/rotas/localidades', (req, res) => {
       countItem(it.cpu, it.cpuStatus);
       countItem(it.monitor, it.monitorStatus);
       countItem(it.monitorAvulso, it.statusConferencia);
-      countItem(it.notebook, it.notebookStatus);
+      if (!shouldHideNotebooks) {
+        countItem(it.notebook, it.notebookStatus);
+      }
     }
 
     const secretariasDisponiveis = Array.from(secStatsMap.values())
@@ -2544,7 +2547,7 @@ app.get('/api/rotas/localidades', (req, res) => {
         });
       }
 
-      if (it.notebook && it.notebook !== '-') {
+      if (!shouldHideNotebooks && it.notebook && it.notebook !== '-') {
         const col = isCollected(it.notebookStatus);
         stop.totalEquipamentos++;
         stop.notebooks++;
@@ -2641,6 +2644,7 @@ app.get('/api/rotas/localidades', (req, res) => {
       regionaisDisponiveis: Object.keys(REGIONAL_TERMS_MAP),
       secretariasDisponiveis,
       selectedSecretarias,
+      hideNotebooks: shouldHideNotebooks,
       totalFiltrado: stops.length,
       localidades: stops
     });
