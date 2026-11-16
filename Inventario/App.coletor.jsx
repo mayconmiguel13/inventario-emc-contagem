@@ -126,9 +126,14 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-layout', 'vertical');
     document.documentElement.setAttribute('data-layout-mode', theme);
-    document.documentElement.setAttribute('data-bs-theme', theme);
     document.documentElement.setAttribute('data-topbar', theme);
-    document.documentElement.setAttribute('data-sidebar', theme);
+    // Na paleta oficial Velzon a sidebar vertical mantém contraste escuro consistente
+    document.documentElement.setAttribute('data-sidebar', 'dark');
+    if (theme === 'dark') {
+      document.documentElement.setAttribute('data-bs-theme', 'dark');
+    } else {
+      document.documentElement.setAttribute('data-bs-theme', 'light');
+    }
   }, [theme]);
 
   const fetchStats = async () => {
@@ -9440,13 +9445,13 @@ function parseMunicipalBarcode(rawCode) {
   // 1. Remover prefixos de leitura comuns
   clean = clean.replace(/^(PMC|PREFEITURA|PATRIMONIO|PAT|PATR)[\s_\-.:]*/i, '').trim();
 
-  // 2. Telefone da etiqueta EMC ou de suporte descartado
+  // 2. Telefone da etiqueta EMC ou suporte descartado
   const onlyDigits = clean.replace(/\D/g, '');
   if (onlyDigits === '21212121' || onlyDigits === '3121212121') {
     return {
       valid: false,
       reason: 'phone',
-      message: 'Telefone descartado. Foque nas barras do patrimônio!'
+      message: 'Telefone descartado. Foque no código de barras do patrimônio!'
     };
   }
 
@@ -9494,7 +9499,7 @@ function parseMunicipalBarcode(rawCode) {
     };
   }
 
-  // 6. Dell Service Tag (7 caracteres alfanuméricos, muito comum em monitores Dell)
+  // 6. Dell Service Tag (7 caracteres alfanuméricos, muito comum em monitores Dell da prefeitura)
   if (/^[A-Z0-9]{7}$/.test(clean) && /[A-Z]/.test(clean)) {
     return {
       valid: true,
@@ -9537,6 +9542,15 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [salvandoLote, setSalvandoLote] = useState(false);
   const [ultimoBipado, setUltimoBipado] = useState(null);
 
+  // REFS CRÍTICOS PARA ELIMINAR O BUG DE STALE CLOSURE NA CÂMERA AO VIVO
+  // Garantem que quando o usuário clicar em "MONITOR", o callback da câmera veja "MONITOR" no mesmo milissegundo!
+  const tipoAtivoRef = useRef('CPU');
+  const marcaModeloRef = useRef('Lenovo ThinkCentre M75q');
+  const localidadeRef = useRef('');
+  const origemRecursoRef = useRef('PMAT / BNDES');
+  const loteItensRef = useRef([]);
+  loteItensRef.current = loteItens;
+
   // Câmera Scanner ao Vivo (PWA / Mobile)
   const [isScanning, setIsScanning] = useState(false);
   const [availableCameras, setAvailableCameras] = useState([]);
@@ -9556,8 +9570,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const lastScannedTimeRef = useRef(0);
   const candidateRef = useRef({ code: '', count: 0, time: 0 }); // Consenso duplo (anti-falso positivo)
   const isProcessingRef = useRef(false);
-  const loteItensRef = useRef(loteItens);
-  loteItensRef.current = loteItens;
   const inputRef = useRef(null);
   const audioContextRef = useRef(null);
 
@@ -9583,6 +9595,31 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [importJsonText, setImportJsonText] = useState('');
   const [importando, setImportando] = useState(false);
   const [importResultado, setImportResultado] = useState(null);
+
+  // Função para alternar o tipo ativo de forma atômica (state + ref)
+  const handleSelectTipo = (novoTipo) => {
+    setTipoAtivo(novoTipo);
+    tipoAtivoRef.current = novoTipo;
+    if (novoTipo === 'CPU') {
+      const mod = 'Lenovo ThinkCentre M75q';
+      setMarcaModelo(mod);
+      marcaModeloRef.current = mod;
+    } else if (novoTipo === 'MONITOR') {
+      const mod = 'Monitor Dell / Lenovo';
+      setMarcaModelo(mod);
+      marcaModeloRef.current = mod;
+    } else {
+      const mod = 'Notebook';
+      setMarcaModelo(mod);
+      marcaModeloRef.current = mod;
+    }
+  };
+
+  // Atualizar localidade sincronizando ref
+  const handleLocalidadeChange = (val) => {
+    setLocalidade(val);
+    localidadeRef.current = val;
+  };
 
   // Som de bip sonoro com Web Audio API
   const playBeep = (type = 'success') => {
@@ -9663,13 +9700,14 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     }
   }, [activeSubTab, tipoAtivo, isScanning]);
 
-  // Registro de código no lote atual com validação de duplicidade
+  // Registro de código no lote atual com validação de duplicidade e tipo atômico
   const handleRegisterCodeNovos = (parseResult, forceAllow = false) => {
     if (!parseResult) return;
     const clean = parseResult.code || String(parseResult).trim().toUpperCase();
     if (!clean) return;
 
-    if (!localidade.trim()) {
+    const curLoc = (localidadeRef.current || localidade || '').trim();
+    if (!curLoc) {
       playBeep('error');
       if (notify) notify('warning', 'Informe o Nome da Localidade de Destino antes de começar a bipar!');
       return;
@@ -9708,15 +9746,18 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
     const nowTime = new Date().toLocaleTimeString('pt-BR');
     const serial = parseResult.serial || '';
-    const modelo = parseResult.modelo || marcaModelo;
+    
+    // LER SEMPRE DO REF ATÔMICO (NUNCA DO CLOSURE CONGELADO)
+    const currentTipo = tipoAtivoRef.current || tipoAtivo || 'CPU';
+    const currentModelo = parseResult.modelo || marcaModeloRef.current || marcaModelo || (currentTipo === 'CPU' ? 'Lenovo ThinkCentre M75q' : currentTipo === 'MONITOR' ? 'Monitor Dell / Lenovo' : 'Notebook');
 
     const novoItem = {
       id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       patrimonio: clean,
       numero_serie: serial,
-      tipo: tipoAtivo,
-      marca_modelo: modelo,
-      origem_recurso: origemRecurso || 'PMAT / BNDES',
+      tipo: currentTipo, // 100% CORRETO E ATUALIZADO
+      marca_modelo: currentModelo,
+      origem_recurso: origemRecursoRef.current || origemRecurso || 'PMAT / BNDES',
       hora: nowTime,
       tipoEtiqueta: parseResult.label || 'Patrimônio Municipal'
     };
@@ -9797,7 +9838,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
           fps: 15,
           qrbox: (viewfinderWidth, viewfinderHeight) => {
             const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const boxSize = Math.max(220, Math.min(Math.floor(minEdge * 0.85), 340));
+            const boxSize = Math.max(200, Math.min(Math.floor(minEdge * 0.82), 320));
             return { width: boxSize, height: boxSize };
           },
           aspectRatio: 1.0,
@@ -9949,7 +9990,8 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
   // Gravar lote completo no backend
   const handleGravarLote = async () => {
-    if (!localidade.trim()) {
+    const locDest = (localidadeRef.current || localidade || '').trim();
+    if (!locDest) {
       if (notify) notify('warning', 'Informe o nome da localidade de destino!');
       return;
     }
@@ -9963,8 +10005,8 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       const loteId = `LOTE_NOVOS_${Date.now()}`;
       const payload = {
         lote_id: loteId,
-        localidade: localidade.trim(),
-        secretaria: secretaria.trim() || null,
+        localidade: locDest,
+        secretaria: (secretaria || '').trim() || null,
         usuario: 'Almoxarifado / Galpão',
         itens: loteItens.map((it) => ({
           patrimonio: it.patrimonio,
@@ -9987,8 +10029,8 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
         // Abre o modal de termo com os itens gravados
         setTermoModalLote({
           lote_id: loteId,
-          localidade: localidade.trim(),
-          secretaria: secretaria.trim() || '',
+          localidade: locDest,
+          secretaria: (secretaria || '').trim() || '',
           data_expedicao: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR'),
           usuario: 'Almoxarifado / Galpão',
           itens: [...loteItens]
@@ -10124,140 +10166,142 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   };
 
   return (
-    <div className="d-flex flex-column gap-3">
-      {/* 1. HERO HEADER BANNER */}
-      <div className="card shadow-sm border mb-0 overflow-hidden" style={{ borderRadius: '12px' }}>
-        <div className="card-body p-3 p-md-4">
-          <div className="row align-items-center g-3">
-            <div className="col-xl-5 col-lg-4 col-12">
-              <div className="d-flex align-items-center gap-3">
-                <div
-                  className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0 shadow-sm"
-                  style={{ width: '48px', height: '48px', background: 'linear-gradient(135deg, #0f766e, #0d9488)' }}
-                >
-                  <i className="ri-inbox-unarchive-line fs-24"></i>
-                </div>
-                <div>
-                  <h4 className="card-title mb-1 fs-17 fw-bold text-dark">
-                    Expedição de Equipamentos Novos
-                  </h4>
-                  <p className="text-muted fs-12 mb-0">
-                    Controle de saída no galpão para substituição dos ativos municipais (BNDES / PMAT)
-                  </p>
-                </div>
+    <div className="d-flex flex-column gap-3 pb-4">
+      {/* 1. HERO HEADER BANNER (100% RESPONSIVO PARA CELULAR) */}
+      <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+        <div className="card-body p-3">
+          <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+            <div className="d-flex align-items-center gap-2">
+              <div
+                className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0 shadow-sm"
+                style={{ width: '38px', height: '38px', background: 'linear-gradient(135deg, #059669, #10b981)' }}
+              >
+                <i className="ri-inbox-unarchive-line fs-20"></i>
+              </div>
+              <div>
+                <h5 className="card-title mb-0 fs-15 fw-bold">
+                  Expedição de Novos
+                </h5>
+                <span className="text-muted fs-11">
+                  Saída Galpão • Ativos PMAT / BNDES
+                </span>
               </div>
             </div>
 
-            {/* 4 KPIs de Novos */}
-            <div className="col-xl-7 col-lg-8 col-12">
-              <div className="row g-2 text-center">
-                <div className="col-3">
-                  <div className="p-2 rounded bg-light border">
-                    <span className="text-muted fs-11 text-uppercase fw-semibold d-block">Total Expedidos</span>
-                    <h5 className="mb-0 fs-17 fw-bold font-monospace text-dark">
-                      {(resumo?.kpis?.totalExpedidos || 0).toLocaleString('pt-BR')}
-                    </h5>
-                  </div>
-                </div>
-                <div className="col-3">
-                  <div className="p-2 rounded bg-soft-primary border border-primary-subtle">
-                    <span className="text-primary fs-11 text-uppercase fw-semibold d-block">💻 CPUs</span>
-                    <h5 className="mb-0 fs-17 fw-bold font-monospace text-primary">
-                      {(resumo?.kpis?.totalCpus || 0).toLocaleString('pt-BR')}
-                    </h5>
-                  </div>
-                </div>
-                <div className="col-3">
-                  <div className="p-2 rounded bg-soft-info border border-info-subtle">
-                    <span className="text-info fs-11 text-uppercase fw-semibold d-block">🖥️ Monitores</span>
-                    <h5 className="mb-0 fs-17 fw-bold font-monospace text-info">
-                      {(resumo?.kpis?.totalMonitores || 0).toLocaleString('pt-BR')}
-                    </h5>
-                  </div>
-                </div>
-                <div className="col-3">
-                  <div className="p-2 rounded bg-soft-success border border-success-subtle">
-                    <span className="text-success fs-11 text-uppercase fw-semibold d-block">Locais Atendidos</span>
-                    <h5 className="mb-0 fs-17 fw-bold font-monospace text-success">
-                      {(resumo?.kpis?.totalLocalidades || 0).toLocaleString('pt-BR')}
-                    </h5>
-                  </div>
-                </div>
+            <span className="badge bg-soft-success text-success font-monospace fs-11 px-2 py-1">
+              Contagem • STI
+            </span>
+          </div>
+
+          {/* 4 KPIs em Grid 2x2 no mobile, 4 colunas no desktop */}
+          <div className="row g-2 text-center">
+            <div className="col-6 col-sm-3">
+              <div className="p-2 rounded border bg-body-tertiary">
+                <span className="text-muted fs-10 text-uppercase fw-semibold d-block text-truncate">Total Saídas</span>
+                <h5 className="mb-0 fs-16 fw-bold font-monospace">
+                  {(resumo?.kpis?.totalExpedidos || 0).toLocaleString('pt-BR')}
+                </h5>
+              </div>
+            </div>
+            <div className="col-6 col-sm-3">
+              <div className="p-2 rounded border border-primary-subtle bg-soft-primary">
+                <span className="text-primary fs-10 text-uppercase fw-semibold d-block text-truncate">💻 CPUs</span>
+                <h5 className="mb-0 fs-16 fw-bold font-monospace text-primary">
+                  {(resumo?.kpis?.totalCpus || 0).toLocaleString('pt-BR')}
+                </h5>
+              </div>
+            </div>
+            <div className="col-6 col-sm-3">
+              <div className="p-2 rounded border border-info-subtle bg-soft-info">
+                <span className="text-info fs-10 text-uppercase fw-semibold d-block text-truncate">🖥️ Monitores</span>
+                <h5 className="mb-0 fs-16 fw-bold font-monospace text-info">
+                  {(resumo?.kpis?.totalMonitores || 0).toLocaleString('pt-BR')}
+                </h5>
+              </div>
+            </div>
+            <div className="col-6 col-sm-3">
+              <div className="p-2 rounded border border-success-subtle bg-soft-success">
+                <span className="text-success fs-10 text-uppercase fw-semibold d-block text-truncate">Locais</span>
+                <h5 className="mb-0 fs-16 fw-bold font-monospace text-success">
+                  {(resumo?.kpis?.totalLocalidades || 0).toLocaleString('pt-BR')}
+                </h5>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 2. SUB-ABAS DE NAVEGAÇÃO INTERNA */}
+      {/* 2. SUB-ABAS DE NAVEGAÇÃO COM ROLAGEM HORIZONTAL NO MOBILE */}
       <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
-        <div className="card-header bg-light border-bottom p-2 p-md-3">
-          <ul className="nav nav-pills nav-customs card-header-pills gap-2">
-            <li className="nav-item">
-              <button
-                type="button"
-                className={`nav-link fs-13 fw-semibold ${activeSubTab === 'bipagem' ? 'active' : ''}`}
-                onClick={() => setActiveSubTab('bipagem')}
-              >
-                <i className="ri-qr-scan-2-line me-1"></i> Bipar Saída no Galpão
-                {loteItens.length > 0 && (
-                  <span className="badge bg-danger text-white ms-2 rounded-pill font-monospace">
-                    {loteItens.length}
-                  </span>
-                )}
-              </button>
-            </li>
-            <li className="nav-item">
-              <button
-                type="button"
-                className={`nav-link fs-13 fw-semibold ${activeSubTab === 'historico' ? 'active' : ''}`}
-                onClick={() => { setActiveSubTab('historico'); fetchExpedidos(1); }}
-              >
-                <i className="ri-file-list-3-line me-1"></i> Histórico de Saídas
-              </button>
-            </li>
-            <li className="nav-item">
-              <button
-                type="button"
-                className={`nav-link fs-13 fw-semibold ${activeSubTab === 'conciliacao' ? 'active' : ''}`}
-                onClick={() => setActiveSubTab('conciliacao')}
-              >
-                <i className="ri-arrow-left-right-line me-1"></i> Balanço Novo x EMC
-              </button>
-            </li>
-            <li className="nav-item">
-              <button
-                type="button"
-                className={`nav-link fs-13 fw-semibold ${activeSubTab === 'importar' ? 'active' : ''}`}
-                onClick={() => setActiveSubTab('importar')}
-              >
-                <i className="ri-upload-cloud-2-line me-1"></i> Importar App Anterior
-              </button>
-            </li>
-          </ul>
+        <div className="card-header border-bottom p-2 p-sm-3">
+          <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
+            <ul className="nav nav-pills card-header-pills flex-nowrap text-nowrap gap-1">
+              <li className="nav-item">
+                <button
+                  type="button"
+                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'bipagem' ? 'active' : ''}`}
+                  onClick={() => setActiveSubTab('bipagem')}
+                >
+                  <i className="ri-qr-scan-2-line me-1"></i> Bipar Saída
+                  {loteItens.length > 0 && (
+                    <span className="badge bg-danger text-white ms-1 rounded-pill font-monospace">
+                      {loteItens.length}
+                    </span>
+                  )}
+                </button>
+              </li>
+              <li className="nav-item">
+                <button
+                  type="button"
+                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'historico' ? 'active' : ''}`}
+                  onClick={() => { setActiveSubTab('historico'); fetchExpedidos(1); }}
+                >
+                  <i className="ri-file-list-3-line me-1"></i> Histórico
+                </button>
+              </li>
+              <li className="nav-item">
+                <button
+                  type="button"
+                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'conciliacao' ? 'active' : ''}`}
+                  onClick={() => setActiveSubTab('conciliacao')}
+                >
+                  <i className="ri-arrow-left-right-line me-1"></i> Balanço Novo x EMC
+                </button>
+              </li>
+              <li className="nav-item">
+                <button
+                  type="button"
+                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'importar' ? 'active' : ''}`}
+                  onClick={() => setActiveSubTab('importar')}
+                >
+                  <i className="ri-upload-cloud-2-line me-1"></i> Importar
+                </button>
+              </li>
+            </ul>
+          </div>
         </div>
 
         {/* 3. CONTEÚDO DA SUB-ABA ATIVA */}
-        <div className="card-body p-3 p-md-4">
+        <div className="card-body p-2 p-sm-3 p-md-4">
           {/* ========================================================= */}
           {/* ABA 1: BIPAGEM CONTÍNUA COM CÂMERA AO VIVO */}
           {/* ========================================================= */}
           {activeSubTab === 'bipagem' && (
             <div className="d-flex flex-column gap-3">
               {/* Seção 1: Destino e Configuração do Lote */}
-              <div className="p-3 rounded bg-light border">
-                <div className="row g-3 align-items-center">
-                  <div className="col-lg-6 col-12">
-                    <label className="form-label fs-12 fw-bold text-dark mb-1">
+              <div className="p-3 rounded border bg-body-tertiary">
+                <div className="row g-2 align-items-center">
+                  <div className="col-12 col-md-6">
+                    <label className="form-label fs-12 fw-bold mb-1">
                       <i className="ri-map-pin-2-fill text-danger me-1"></i>
-                      Localidade de Destino (Prédio / Setor / Escola / CRAS):
+                      Localidade de Destino:
                     </label>
                     <input
                       type="text"
-                      className="form-control form-control-lg fs-14 fw-semibold"
+                      className="form-control form-control-md fs-14 fw-semibold"
                       placeholder="Ex: CRAS Industrial, SEDE, E.M. Heitor Villa Lobos..."
                       value={localidade}
-                      onChange={(e) => setLocalidade(e.target.value)}
+                      onChange={(e) => handleLocalidadeChange(e.target.value)}
                       list="localidades-datalist-novos"
                       autoComplete="off"
                     />
@@ -10266,137 +10310,129 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                         <option key={loc} value={loc} />
                       ))}
                     </datalist>
-                    <small className="text-muted fs-11">
-                      Escolha uma localidade ou digite o nome do destino das máquinas.
-                    </small>
                   </div>
 
-                  <div className="col-lg-3 col-6">
-                    <label className="form-label fs-12 fw-bold text-dark mb-1">
-                      Secretaria (Opcional):
+                  <div className="col-6 col-md-3">
+                    <label className="form-label fs-12 fw-bold mb-1">
+                      Secretaria:
                     </label>
                     <input
                       type="text"
-                      className="form-control"
-                      placeholder="Ex: SMDS, SEAD, SEDUC..."
+                      className="form-control form-control-md fs-13"
+                      placeholder="Ex: SMDS, SEAD..."
                       value={secretaria}
                       onChange={(e) => setSecretaria(e.target.value)}
                     />
                   </div>
 
-                  <div className="col-lg-3 col-6">
-                    <label className="form-label fs-12 fw-bold text-dark mb-1">
-                      Modelo / Equipamento:
+                  <div className="col-6 col-md-3">
+                    <label className="form-label fs-12 fw-bold mb-1">
+                      Modelo Padrão:
                     </label>
                     <input
                       type="text"
-                      className="form-control"
+                      className="form-control form-control-md fs-13"
                       value={marcaModelo}
-                      onChange={(e) => setMarcaModelo(e.target.value)}
+                      onChange={(e) => {
+                        setMarcaModelo(e.target.value);
+                        marcaModeloRef.current = e.target.value;
+                      }}
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Seção 2: Seletor Rápido de Tipo em 1 Clique */}
-              <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 p-2 bg-white rounded border shadow-xs">
-                <div className="d-flex align-items-center gap-2">
-                  <span className="fs-12 text-muted fw-bold text-uppercase">Tipo a Bipar:</span>
-                  <span className="badge bg-primary text-white fs-12 font-monospace px-2 py-1">
-                    {tipoAtivo}
+              {/* Seção 2: Seletor Rápido de Tipo em 3 Botões Touch Grandes (Mobile First) */}
+              <div className="d-flex flex-column gap-1">
+                <div className="d-flex align-items-center justify-content-between px-1">
+                  <span className="fs-11 fw-bold text-muted text-uppercase">
+                    Selecione o que vai bipar agora:
+                  </span>
+                  <span className="badge bg-primary text-white font-monospace fs-11">
+                    Selecionado: {tipoAtivo}
                   </span>
                 </div>
 
-                <div className="btn-group" role="group">
-                  <button
-                    type="button"
-                    className={`btn btn-md px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
-                      tipoAtivo === 'CPU' ? 'btn-primary shadow-xs' : 'btn-outline-primary'
-                    }`}
-                    onClick={() => {
-                      setTipoAtivo('CPU');
-                      setMarcaModelo('Lenovo ThinkCentre M75q');
-                    }}
-                  >
-                    <i className="ri-computer-line fs-18"></i>
-                    <span>💻 CPU / Desktop</span>
-                    <span className="badge bg-white text-primary rounded-pill font-monospace fs-11 ms-1">
-                      {loteStats.cpus}
-                    </span>
-                  </button>
+                <div className="row g-2">
+                  <div className="col-4">
+                    <button
+                      type="button"
+                      className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center gap-1 transition-all ${
+                        tipoAtivo === 'CPU'
+                          ? 'btn-primary shadow-sm fw-bold border-2'
+                          : 'btn-outline-primary'
+                      }`}
+                      style={{ minHeight: '52px', borderRadius: '10px' }}
+                      onClick={() => handleSelectTipo('CPU')}
+                    >
+                      <span className="fs-13 fw-bold text-truncate">💻 CPU</span>
+                      <span className={`badge rounded-pill font-monospace ${
+                        tipoAtivo === 'CPU' ? 'bg-white text-primary' : 'bg-primary text-white'
+                      }`} style={{ fontSize: '10px' }}>
+                        {loteStats.cpus} lidos
+                      </span>
+                    </button>
+                  </div>
 
-                  <button
-                    type="button"
-                    className={`btn btn-md px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
-                      tipoAtivo === 'MONITOR' ? 'btn-info text-white shadow-xs' : 'btn-outline-info'
-                    }`}
-                    onClick={() => {
-                      setTipoAtivo('MONITOR');
-                      setMarcaModelo('Monitor Dell / Lenovo');
-                    }}
-                  >
-                    <i className="ri-tv-line fs-18"></i>
-                    <span>🖥️ Monitor</span>
-                    <span className="badge bg-white text-info rounded-pill font-monospace fs-11 ms-1">
-                      {loteStats.monitores}
-                    </span>
-                  </button>
+                  <div className="col-4">
+                    <button
+                      type="button"
+                      className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center gap-1 transition-all ${
+                        tipoAtivo === 'MONITOR'
+                          ? 'btn-info text-white shadow-sm fw-bold border-2'
+                          : 'btn-outline-info'
+                      }`}
+                      style={{ minHeight: '52px', borderRadius: '10px' }}
+                      onClick={() => handleSelectTipo('MONITOR')}
+                    >
+                      <span className="fs-13 fw-bold text-truncate">🖥️ Monitor</span>
+                      <span className={`badge rounded-pill font-monospace ${
+                        tipoAtivo === 'MONITOR' ? 'bg-white text-info' : 'bg-info text-white'
+                      }`} style={{ fontSize: '10px' }}>
+                        {loteStats.monitores} lidos
+                      </span>
+                    </button>
+                  </div>
 
-                  <button
-                    type="button"
-                    className={`btn btn-md px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
-                      tipoAtivo === 'NOTEBOOK' ? 'btn-warning text-dark shadow-xs' : 'btn-outline-warning'
-                    }`}
-                    onClick={() => {
-                      setTipoAtivo('NOTEBOOK');
-                      setMarcaModelo('Notebook');
-                    }}
-                  >
-                    <i className="ri-macbook-line fs-18"></i>
-                    <span>💼 Notebook</span>
-                    <span className="badge bg-white text-dark rounded-pill font-monospace fs-11 ms-1">
-                      {loteStats.notebooks}
-                    </span>
-                  </button>
+                  <div className="col-4">
+                    <button
+                      type="button"
+                      className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center gap-1 transition-all ${
+                        tipoAtivo === 'NOTEBOOK'
+                          ? 'btn-warning text-dark shadow-sm fw-bold border-2'
+                          : 'btn-outline-warning'
+                      }`}
+                      style={{ minHeight: '52px', borderRadius: '10px' }}
+                      onClick={() => handleSelectTipo('NOTEBOOK')}
+                    >
+                      <span className="fs-13 fw-bold text-truncate">💼 Note</span>
+                      <span className={`badge rounded-pill font-monospace ${
+                        tipoAtivo === 'NOTEBOOK' ? 'bg-dark text-white' : 'bg-warning text-dark'
+                      }`} style={{ fontSize: '10px' }}>
+                        {loteStats.notebooks} lidos
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {/* Seção 3: Leitor Óptico com CÂMERA AO VIVO (IGUAL AO COLETOR EMC) */}
-              <div className="card border shadow-sm mb-0">
-                <div className="card-header bg-dark text-white d-flex align-items-center justify-content-between py-2 flex-wrap gap-2">
+              <div className="card border shadow-sm mb-0 overflow-hidden" style={{ borderRadius: '12px' }}>
+                <div className="card-header bg-dark text-white d-flex align-items-center justify-content-between py-2 px-3 flex-wrap gap-2">
                   <div className="d-flex align-items-center gap-2">
-                    <span className={`badge ${isScanning ? 'bg-success' : 'bg-secondary'} rounded-pill`}>
-                      {isScanning ? '● CÂMERA AO VIVO (HD 720p)' : '○ CÂMERA DESLIGADA'}
+                    <span className={`badge ${isScanning ? 'bg-success' : 'bg-secondary'} rounded-pill font-monospace fs-11`}>
+                      {isScanning ? '● CÂMERA LIGADA' : '○ CÂMERA PAUSADA'}
                     </span>
-                    <span className="fs-12 text-light d-none d-sm-inline">Foco Contínuo Municipal</span>
+                    <span className="badge bg-primary rounded-pill font-monospace fs-11">
+                      {tipoAtivo}
+                    </span>
                   </div>
 
-                  <div className="d-flex align-items-center gap-1 flex-wrap">
-                    {/* Seletor de Câmeras */}
-                    {availableCameras.length > 1 && (
-                      <select
-                        className="form-select form-select-sm bg-dark text-white border-secondary me-1 py-0 fs-11"
-                        style={{ width: 'auto', height: '28px' }}
-                        value={selectedCameraId}
-                        onChange={(e) => {
-                          setSelectedCameraId(e.target.value);
-                          if (isScanning) {
-                            stopCamera().then(() => startCamera(e.target.value));
-                          }
-                        }}
-                      >
-                        {availableCameras.map((cam) => (
-                          <option key={cam.id} value={cam.id}>
-                            {cam.label || `Câmera ${cam.id.substring(0, 5)}`}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-
+                  <div className="d-flex align-items-center gap-1">
                     {/* Hardware Zoom */}
                     {hasZoom && isScanning && (
                       <div className="btn-group btn-group-sm me-1" role="group">
-                        {[1, 1.5, 2, 2.5].filter(z => z <= (zoomMinMax.max || 3)).map((z) => (
+                        {[1, 2].filter(z => z <= (zoomMinMax.max || 3)).map((z) => (
                           <button
                             key={z}
                             type="button"
@@ -10426,15 +10462,15 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                     {isScanning ? (
                       <button
                         type="button"
-                        className="btn btn-sm btn-danger px-3 py-1 d-flex align-items-center gap-1 fw-bold"
+                        className="btn btn-sm btn-danger px-3 py-1 d-flex align-items-center gap-1 fw-bold shadow-sm"
                         onClick={stopCamera}
                       >
-                        <i className="ri-stop-circle-line"></i> Pausar Câmera
+                        <i className="ri-stop-circle-line"></i> Pausar
                       </button>
                     ) : (
                       <button
                         type="button"
-                        className="btn btn-sm btn-success px-3 py-1 d-flex align-items-center gap-1 fw-bold"
+                        className="btn btn-sm btn-success px-3 py-1 d-flex align-items-center gap-1 fw-bold shadow-sm"
                         onClick={() => startCamera(selectedCameraId)}
                       >
                         <i className="ri-camera-lens-line"></i> Iniciar Câmera
@@ -10446,7 +10482,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 <div
                   className="card-body p-0 bg-dark text-center position-relative overflow-hidden"
                   style={{
-                    minHeight: '340px',
+                    minHeight: '280px',
                     transition: 'box-shadow 0.15s ease',
                     boxShadow: flashFeedback === 'success'
                       ? 'inset 0 0 0 10px #0ab39c, 0 0 40px #0ab39c'
@@ -10458,17 +10494,16 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   {/* Container do Scanner da Câmera */}
                   <div
                     id="camera-reader-novos"
-                    style={{ width: '100%', minHeight: '340px', background: '#000' }}
+                    style={{ width: '100%', minHeight: '280px', background: '#000' }}
                   ></div>
 
-                  {/* Contador Flutuante no Topo do Viewfinder */}
+                  {/* Contador Flutuante no Topo do Viewfinder com Tipo Ativo em Destaque */}
                   <div
                     className="position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill bg-dark bg-opacity-75 text-white fs-12 fw-bold shadow-sm d-flex align-items-center gap-2"
                     style={{ zIndex: 6, backdropFilter: 'blur(6px)', border: '1px solid rgba(255,255,255,0.2)' }}
                   >
-                    <span className="badge bg-success font-monospace">{loteItens.length}</span>
-                    <span>no Lote Atual</span>
-                    <span className="badge bg-primary font-monospace ms-1">{tipoAtivo}</span>
+                    <span className="badge bg-success font-monospace">{loteItens.length} no lote</span>
+                    <span className="text-warning font-monospace">Bipando: {tipoAtivo}</span>
                   </div>
 
                   {/* Mira Óptica com Retículo de 4 Cantos e Guias Horizontal + Vertical */}
@@ -10476,8 +10511,8 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                     <div
                       className="position-absolute top-50 start-50 translate-middle pointer-events-none"
                       style={{
-                        width: '250px',
-                        height: '250px',
+                        width: 'min(240px, 75vw)',
+                        height: 'min(240px, 75vw)',
                         border: '1.5px dashed rgba(255, 255, 255, 0.45)',
                         borderRadius: '16px',
                         zIndex: 4,
@@ -10492,7 +10527,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
                       {/* Guia Laser Vermelho Central */}
                       <div style={{ position: 'absolute', top: '50%', left: '8px', right: '8px', height: '2px', background: 'rgba(239, 68, 68, 0.9)', boxShadow: '0 0 8px #ef4444' }}></div>
-                      <div style={{ position: 'absolute', left: '50%', top: '8px', bottom: '8px', width: '1px', background: 'rgba(239, 68, 68, 0.45)' }}></div>
 
                       {/* Legenda de Orientação */}
                       <span
@@ -10509,23 +10543,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                           textShadow: '0 1px 3px rgba(0,0,0,0.95)'
                         }}
                       >
-                        FOQUE O PATRIMÔNIO (PMAT / BNDES / SÉRIE)
-                      </span>
-
-                      <span
-                        style={{
-                          position: 'absolute',
-                          bottom: '6px',
-                          left: '50%',
-                          transform: 'translateX(-50%)',
-                          fontSize: '10px',
-                          color: 'rgba(255,255,255,0.85)',
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                          textShadow: '0 1px 3px rgba(0,0,0,0.95)'
-                        }}
-                      >
-                        Lê na Horizontal e Vertical
+                        FOQUE NO PATRIMÔNIO OU SERIAL
                       </span>
                     </div>
                   )}
@@ -10533,7 +10551,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   {/* Banner Flutuante de Feedback Imediato */}
                   {flashFeedback && (
                     <div
-                      className={`position-absolute top-0 start-0 end-0 p-3 text-white fw-bold text-center fs-16 shadow ${
+                      className={`position-absolute top-0 start-0 end-0 p-3 text-white fw-bold text-center fs-15 shadow ${
                         flashFeedback === 'success'
                           ? 'bg-success'
                           : flashFeedback === 'duplicate'
@@ -10544,53 +10562,77 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                     >
                       <i className={`ri-${flashFeedback === 'success' ? 'checkbox-circle-fill' : 'lock-2-fill'} me-2 fs-18`}></i>
                       {flashFeedback === 'duplicate'
-                        ? `⚠️ ATENÇÃO: Equipamento ${lastScannedCodeRef.current} já foi adicionado a este lote!`
+                        ? `⚠️ ATENÇÃO: Equipamento ${lastScannedCodeRef.current} já está no lote!`
                         : ultimoBipado
-                        ? `✓ ${ultimoBipado.patrimonio} (${ultimoBipado.tipo}) Adicionado à Lista!`
-                        : '✓ EQUIPAMENTO ADICIONADO COM SUCESSO!'}
+                        ? `✓ ${ultimoBipado.patrimonio} (${ultimoBipado.tipo}) Adicionado!`
+                        : '✓ EQUIPAMENTO ADICIONADO!'}
                     </div>
                   )}
 
                   {/* Estado Ocioso: Botão de Ativar Leitor */}
                   {!isScanning && (
                     <div
-                      className="position-absolute top-50 start-50 translate-middle text-center w-100 p-4"
+                      className="position-absolute top-50 start-50 translate-middle text-center w-100 p-3"
                       style={{ zIndex: 5 }}
                     >
-                      <div className="avatar-lg rounded-circle bg-soft-success mx-auto d-flex align-items-center justify-content-center text-success fs-36 mb-3">
+                      <div className="avatar-md rounded-circle bg-soft-success mx-auto d-flex align-items-center justify-content-center text-success fs-28 mb-2">
                         <i className="ri-qr-scan-2-line"></i>
                       </div>
-                      <h5 className="text-white fs-16 mb-2">Câmera Pronta para Escaneamento</h5>
-                      <p className="text-muted fs-12 mb-3" style={{ maxWidth: '420px', margin: '0 auto' }}>
-                        Toque no botão abaixo para ativar a câmera do celular. Aponte para a etiqueta branca de patrimônio da Prefeitura (PMAT / BNDES): o leitor adiciona à lista com bip sonoro e trava de duplicidade!
+                      <h6 className="text-white fs-15 mb-1">Câmera Pronta</h6>
+                      <p className="text-light opacity-75 fs-12 mb-3" style={{ maxWidth: '340px', margin: '0 auto' }}>
+                        Toque abaixo para ligar a câmera do celular. Aponte para a etiqueta de patrimônio ou serial.
                       </p>
                       <button
                         type="button"
-                        className="btn btn-success btn-lg rounded-pill px-4 shadow"
+                        className="btn btn-success btn-md rounded-pill px-4 shadow"
                         onClick={() => startCamera(selectedCameraId)}
                       >
-                        <i className="ri-camera-fill me-2"></i> Ativar Leitor Óptico (Câmera)
+                        <i className="ri-camera-fill me-1"></i> Ativar Leitor Óptico
                       </button>
                     </div>
                   )}
 
                   {cameraError && (
-                    <div className="alert alert-warning m-3 text-start fs-12" role="alert">
+                    <div className="alert alert-warning m-2 text-start fs-12" role="alert">
                       <i className="ri-error-warning-line me-1"></i> {cameraError}
                     </div>
                   )}
                 </div>
 
+                {/* Seletor de Câmera quando houver mais de uma */}
+                {availableCameras.length > 1 && (
+                  <div className="p-2 border-top bg-body-tertiary d-flex align-items-center justify-content-between">
+                    <span className="fs-11 text-muted fw-semibold">Dispositivo de Câmera:</span>
+                    <select
+                      className="form-select form-select-sm"
+                      style={{ maxWidth: '220px' }}
+                      value={selectedCameraId}
+                      onChange={(e) => {
+                        setSelectedCameraId(e.target.value);
+                        if (isScanning) {
+                          stopCamera().then(() => startCamera(e.target.value));
+                        }
+                      }}
+                    >
+                      {availableCameras.map((cam) => (
+                        <option key={cam.id} value={cam.id}>
+                          {cam.label || `Câmera ${cam.id.substring(0, 5)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 {/* Alerta de Duplicidade */}
                 {duplicateAlert && (
-                  <div className="alert alert-warning border border-warning shadow-sm mx-3 mt-3 mb-0 p-2 d-flex align-items-center justify-content-between">
+                  <div className="alert alert-warning border border-warning shadow-sm mx-2 mt-2 mb-0 p-2 d-flex align-items-center justify-content-between">
                     <div className="d-flex align-items-center gap-2">
-                      <i className="ri-lock-2-line fs-18 text-warning"></i>
-                      <span className="fs-12 fw-bold text-dark">{duplicateAlert.message}</span>
+                      <i className="ri-lock-2-line fs-16 text-warning"></i>
+                      <span className="fs-12 fw-bold">{duplicateAlert.message}</span>
                     </div>
                     <button
                       type="button"
-                      className="btn btn-sm btn-link text-dark p-0 text-decoration-none"
+                      className="btn btn-sm btn-link p-0 text-decoration-none"
                       onClick={() => setDuplicateAlert(null)}
                     >
                       <i className="ri-close-line fs-16"></i>
@@ -10599,22 +10641,22 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 )}
 
                 {/* Entrada Manual de Apoio (Para Digitação ou Leitor USB) */}
-                <div className="p-3 bg-light border-top">
+                <div className="p-2 p-sm-3 border-top bg-body-tertiary">
                   <form onSubmit={handleBiparManual}>
                     <div className="input-group input-group-md">
-                      <span className="input-group-text bg-white text-muted">
+                      <span className="input-group-text bg-body text-muted">
                         <i className="ri-keyboard-line fs-16"></i>
                       </span>
                       <input
                         ref={inputRef}
                         type="text"
                         className="form-control font-monospace fw-bold fs-14"
-                        placeholder={`Ou digite o patrimônio do ${tipoAtivo} (ex: 100039491) e pressione Enter...`}
+                        placeholder={`Digite o patrimônio do ${tipoAtivo} (ex: 100039491)...`}
                         value={barcodeInput}
                         onChange={(e) => setBarcodeInput(e.target.value)}
                       />
                       <button type="submit" className="btn btn-primary fw-semibold px-3">
-                        <i className="ri-add-line me-1"></i> Adicionar
+                        <i className="ri-add-line me-1"></i> Bipar
                       </button>
                     </div>
                   </form>
@@ -10622,21 +10664,18 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
               </div>
 
               {/* Seção 4: Tabela de Itens do Lote em Montagem */}
-              <div className="card shadow-xs border mb-0" style={{ borderRadius: '10px' }}>
-                <div className="card-header bg-light border-bottom p-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+              <div className="card shadow-xs border mb-0" style={{ borderRadius: '12px' }}>
+                <div className="card-header border-bottom p-2 p-sm-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
                   <div className="d-flex align-items-center gap-2">
                     <i className="ri-stack-line text-success fs-18"></i>
-                    <h6 className="card-title mb-0 fs-14 fw-bold text-dark">
-                      Equipamentos no Lote Atual ({loteStats.total})
+                    <h6 className="card-title mb-0 fs-14 fw-bold">
+                      Lote Atual ({loteStats.total})
                     </h6>
                     <span className="badge bg-soft-primary text-primary fs-11">
                       {loteStats.cpus} CPUs
                     </span>
                     <span className="badge bg-soft-info text-info fs-11">
                       {loteStats.monitores} Monitores
-                    </span>
-                    <span className="badge bg-soft-warning text-dark fs-11">
-                      {loteStats.notebooks} Notes
                     </span>
                   </div>
 
@@ -10649,7 +10688,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                           if (window.confirm('Deseja limpar todos os itens deste lote não salvo?')) setLoteItens([]);
                         }}
                       >
-                        <i className="ri-delete-bin-line me-1"></i> Limpar Lote
+                        <i className="ri-delete-bin-line me-1"></i> Limpar
                       </button>
                     )}
 
@@ -10660,30 +10699,29 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                       disabled={salvandoLote || loteItens.length === 0}
                     >
                       <i className="ri-save-3-line"></i>
-                      {salvandoLote ? 'Gravando...' : `Gravar e Finalizar Saída (${loteItens.length} itens)`}
+                      {salvandoLote ? 'Gravando...' : `Gravar Saída (${loteItens.length})`}
                     </button>
                   </div>
                 </div>
 
                 <div className="card-body p-0">
                   {loteItens.length === 0 ? (
-                    <div className="text-center py-5 text-muted">
-                      <i className="ri-inbox-line fs-36 d-block mb-2 text-secondary opacity-50"></i>
-                      <p className="fs-13 mb-1 fw-semibold text-dark">Nenhum equipamento adicionado a esta remessa ainda.</p>
-                      <span className="fs-12">Preencha o destino acima, inicie a câmera ou digite os patrimônios para conferência.</span>
+                    <div className="text-center py-4 text-muted">
+                      <i className="ri-inbox-line fs-32 d-block mb-1 text-secondary opacity-50"></i>
+                      <p className="fs-13 mb-0 fw-semibold">Nenhum equipamento adicionado ainda.</p>
+                      <span className="fs-11 text-muted">Preencha o destino, selecione o tipo e aponte a câmera para os equipamentos.</span>
                     </div>
                   ) : (
-                    <div className="table-responsive" style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                    <div className="table-responsive" style={{ maxHeight: '340px', overflowY: 'auto' }}>
                       <table className="table table-sm table-hover table-striped align-middle mb-0 fs-12">
-                        <thead className="table-light text-muted fw-bold sticky-top">
+                        <thead className="table-light sticky-top">
                           <tr>
-                            <th style={{ width: '45px' }}>#</th>
-                            <th style={{ width: '90px' }}>Tipo</th>
-                            <th>Patrimônio Municipal</th>
-                            <th>Nº de Série</th>
-                            <th>Modelo</th>
-                            <th>Horário</th>
-                            <th className="text-center" style={{ width: '60px' }}>Ação</th>
+                            <th style={{ width: '35px' }}>#</th>
+                            <th style={{ width: '80px' }}>Tipo</th>
+                            <th>Patrimônio</th>
+                            <th>Série</th>
+                            <th>Hora</th>
+                            <th className="text-center" style={{ width: '50px' }}>Ação</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -10698,13 +10736,12 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                                 </span>
                               </td>
                               <td>
-                                <span className="font-monospace fw-bold text-dark fs-13">{it.patrimonio}</span>
+                                <span className="font-monospace fw-bold fs-13">{it.patrimonio}</span>
                                 {it.tipoEtiqueta && (
                                   <span className="d-block text-muted fs-10">{it.tipoEtiqueta}</span>
                                 )}
                               </td>
                               <td className="font-monospace text-muted">{it.numero_serie || '-'}</td>
-                              <td className="text-truncate" style={{ maxWidth: '200px' }}>{it.marca_modelo}</td>
                               <td className="text-muted font-monospace fs-11">{it.hora}</td>
                               <td className="text-center">
                                 <button
@@ -10734,12 +10771,12 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
             <div className="d-flex flex-column gap-3">
               {/* Barra de Filtros */}
               <div className="row g-2 align-items-center">
-                <div className="col-lg-5 col-md-6 col-12">
+                <div className="col-12 col-md-5">
                   <div className="position-relative">
                     <input
                       type="text"
                       className="form-control form-control-sm pe-4"
-                      placeholder="Buscar patrimônio, serial, localidade ou modelo..."
+                      placeholder="Buscar patrimônio, serial, localidade..."
                       value={historicoSearch}
                       onChange={(e) => setHistoricoSearch(e.target.value)}
                     />
@@ -10755,20 +10792,20 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   </div>
                 </div>
 
-                <div className="col-lg-3 col-md-3 col-6">
+                <div className="col-6 col-md-3">
                   <select
                     className="form-select form-select-sm"
                     value={historicoTipo}
                     onChange={(e) => setHistoricoTipo(e.target.value)}
                   >
                     <option value="">Todos os Tipos</option>
-                    <option value="CPU">💻 Apenas CPUs</option>
-                    <option value="MONITOR">🖥️ Apenas Monitores</option>
-                    <option value="NOTEBOOK">💼 Apenas Notebooks</option>
+                    <option value="CPU">💻 CPUs</option>
+                    <option value="MONITOR">🖥️ Monitores</option>
+                    <option value="NOTEBOOK">💼 Notebooks</option>
                   </select>
                 </div>
 
-                <div className="col-lg-4 col-md-3 col-6 text-end d-flex gap-2 justify-content-end">
+                <div className="col-6 col-md-4 text-end d-flex gap-2 justify-content-end">
                   <button
                     type="button"
                     className="btn btn-soft-primary btn-sm"
@@ -10783,7 +10820,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                     onClick={handleExportarHistorico}
                     disabled={expedidosList.length === 0}
                   >
-                    <i className="ri-file-excel-2-line"></i> Exportar CSV
+                    <i className="ri-file-excel-2-line"></i> CSV
                   </button>
                 </div>
               </div>
@@ -10791,31 +10828,30 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
               {/* Tabela do Histórico */}
               <div className="table-responsive border rounded" style={{ minHeight: '300px' }}>
                 <table className="table table-sm table-hover table-striped align-middle mb-0 fs-12">
-                  <thead className="table-light text-muted fw-bold">
+                  <thead className="table-light fw-bold">
                     <tr>
                       <th style={{ width: '40px' }}>#</th>
                       <th>Data / Hora</th>
-                      <th>Localidade de Destino</th>
+                      <th>Localidade</th>
                       <th>Secretaria</th>
                       <th>Tipo</th>
                       <th>Patrimônio</th>
-                      <th>Nº de Série</th>
+                      <th>Série</th>
                       <th>Modelo</th>
-                      <th>Origem Registro</th>
-                      <th className="text-center" style={{ width: '60px' }}>Ação</th>
+                      <th className="text-center" style={{ width: '50px' }}>Ação</th>
                     </tr>
                   </thead>
                   <tbody>
                     {loadingExpedidos ? (
                       <tr>
-                        <td colSpan="10" className="text-center py-4 text-muted">
+                        <td colSpan="9" className="text-center py-4 text-muted">
                           <span className="spinner-border spinner-border-sm me-2" role="status"></span>
                           Carregando histórico de expedições...
                         </td>
                       </tr>
                     ) : expedidosList.length === 0 ? (
                       <tr>
-                        <td colSpan="10" className="text-center py-5 text-muted">
+                        <td colSpan="9" className="text-center py-5 text-muted">
                           Nenhum equipamento novo expedido encontrado com os filtros selecionados.
                         </td>
                       </tr>
@@ -10824,7 +10860,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                         <tr key={item.id}>
                           <td className="text-muted font-monospace">{(page - 1) * 50 + index + 1}</td>
                           <td className="font-monospace fs-11 text-muted">{item.data_expedicao}</td>
-                          <td className="fw-bold text-dark">{item.localidade}</td>
+                          <td className="fw-bold">{item.localidade}</td>
                           <td>{item.secretaria || '-'}</td>
                           <td>
                             <span className={`badge font-monospace ${
@@ -10833,14 +10869,9 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                               {item.tipo}
                             </span>
                           </td>
-                          <td className="font-monospace fw-bold text-dark fs-13">{item.patrimonio}</td>
+                          <td className="font-monospace fw-bold fs-13">{item.patrimonio}</td>
                           <td className="font-monospace text-muted">{item.numero_serie || '-'}</td>
                           <td className="text-muted">{item.marca_modelo || '-'}</td>
-                          <td>
-                            <span className="badge bg-light text-muted border font-monospace fs-10">
-                              {item.origem_registro || 'Bipagem'}
-                            </span>
-                          </td>
                           <td className="text-center">
                             <button
                               type="button"
@@ -10892,8 +10923,8 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
           {/* ========================================================= */}
           {activeSubTab === 'conciliacao' && (
             <div className="d-flex flex-column gap-3">
-              <div className="p-3 bg-light rounded border">
-                <label className="form-label fs-13 fw-bold text-dark mb-1">
+              <div className="p-3 bg-body-tertiary rounded border">
+                <label className="form-label fs-13 fw-bold mb-1">
                   Selecione a Localidade para Ver o Balanço (Novos Entregues vs. EMC Retornados ao Galpão):
                 </label>
                 <div className="row g-2 align-items-center">
@@ -10963,7 +10994,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                         <div className={`p-3 rounded border ${
                           (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'bg-soft-danger border-danger-subtle' : 'bg-soft-info border-info-subtle'
                         }`}>
-                          <span className="fs-11 text-uppercase fw-bold d-block text-dark">Saldo Pendente a Retornar</span>
+                          <span className="fs-11 text-uppercase fw-bold d-block">Saldo Pendente a Retornar</span>
                           <h4 className={`mb-0 fs-22 font-monospace fw-bold ${
                             (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'text-danger' : 'text-info'
                           }`}>
@@ -10988,11 +11019,11 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
             <div className="d-flex flex-column gap-3">
               <div className="alert alert-info border-info-subtle fs-12 mb-0">
                 <i className="ri-information-line fs-16 align-middle me-1"></i>
-                <strong>Importação Rápida de Histórico:</strong> Cole aqui os dados do seu aplicativo anterior (planilha Excel / CSV copiado e colado ou array JSON). O sistema identifica automaticamente colunas de Patrimônio, Localidade, Tipo e Série.
+                <strong>Importação Rápida de Histórico:</strong> Cole os dados do seu aplicativo anterior (planilha Excel / CSV copiado e colado ou JSON). O sistema identifica automaticamente colunas de Patrimônio, Localidade, Tipo e Série.
               </div>
 
               <div className="mb-2">
-                <label className="form-label fs-12 fw-bold text-dark">
+                <label className="form-label fs-12 fw-bold">
                   Cole os dados abaixo (CSV com cabeçalho ou JSON):
                 </label>
                 <textarea
@@ -11004,9 +11035,9 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 ></textarea>
               </div>
 
-              <div className="d-flex align-items-center justify-content-between">
+              <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <span className="text-muted fs-11">
-                  Formatos aceitos: delimitados por ponto-e-vírgula (;), vírgula (,), tabulação (tab) ou JSON.
+                  Formatos aceitos: delimitados por ponto-e-vírgula (;), vírgula (,), tabulação ou JSON.
                 </span>
                 <button
                   type="button"
@@ -11015,7 +11046,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   disabled={importando || !importJsonText.trim()}
                 >
                   <i className="ri-upload-2-line me-1"></i>
-                  {importando ? 'Processando Importação...' : 'Importar Dados Agora'}
+                  {importando ? 'Processando...' : 'Importar Dados Agora'}
                 </button>
               </div>
 
@@ -11091,7 +11122,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                         <tr key={idx}>
                           <td className="text-center font-monospace">{idx + 1}</td>
                           <td className="fw-bold">{it.tipo}</td>
-                          <td className="font-monospace fw-bold text-dark fs-12">{it.patrimonio}</td>
+                          <td className="font-monospace fw-bold fs-12">{it.patrimonio}</td>
                           <td className="font-monospace text-muted">{it.numero_serie || '-'}</td>
                           <td>{it.marca_modelo}</td>
                           <td>{it.origem_recurso || 'PMAT / BNDES'}</td>
