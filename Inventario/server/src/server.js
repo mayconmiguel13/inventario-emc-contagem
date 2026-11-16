@@ -262,6 +262,27 @@ async function syncFromTurso() {
       }
     }
 
+    // 3. Sincronizar expedicao_novos
+    try {
+      const resExp = await executeTurso('SELECT * FROM expedicao_novos');
+      if (resExp && resExp.results && resExp.results[0]?.response?.result) {
+        const rowsExp = tursoResultToObjects(resExp.results[0].response.result);
+        if (rowsExp.length > 0) {
+          const cols = Object.keys(rowsExp[0]);
+          const colList = cols.map(c => `"${c}"`).join(', ');
+          const placeholders = cols.map(c => `@${c}`).join(', ');
+          const upsertExp = db.prepare(`INSERT OR REPLACE INTO expedicao_novos (${colList}) VALUES (${placeholders})`);
+          const runExpTx = db.transaction((items) => {
+            for (const it of items) upsertExp.run(it);
+          });
+          runExpTx(rowsExp);
+          console.log(`[Turso] Sincronizados ${rowsExp.length} equipamentos novos em expedicao_novos.`);
+        }
+      }
+    } catch (e) {
+      console.warn('[Turso Sync expedicao_novos warning]:', e.message);
+    }
+
     lastTursoSyncTime = new Date().toLocaleString('pt-BR');
     lastTursoStatus = 'Conectado e Sincronizado';
     invalidateCache();
@@ -335,6 +356,28 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_conf_codigo ON conferencias_galpao(codigo_bipado);
   CREATE INDEX IF NOT EXISTS idx_conf_norm ON conferencias_galpao(codigo_normalizado);
   CREATE INDEX IF NOT EXISTS idx_conf_status ON conferencias_galpao(status_conciliacao);
+
+  CREATE TABLE IF NOT EXISTS expedicao_novos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lote_id TEXT NOT NULL,
+    localidade TEXT NOT NULL,
+    secretaria TEXT,
+    tipo TEXT NOT NULL,
+    patrimonio TEXT NOT NULL,
+    numero_serie TEXT,
+    marca_modelo TEXT,
+    origem_recurso TEXT DEFAULT 'PMAT / BNDES',
+    data_expedicao TEXT DEFAULT (datetime('now', 'localtime')),
+    usuario TEXT DEFAULT 'Maycon',
+    origem_registro TEXT DEFAULT 'bipagem_galpao',
+    observacoes TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_exp_novos_patrimonio ON expedicao_novos(patrimonio);
+  CREATE INDEX IF NOT EXISTS idx_exp_novos_localidade ON expedicao_novos(localidade);
+  CREATE INDEX IF NOT EXISTS idx_exp_novos_tipo ON expedicao_novos(tipo);
+  CREATE INDEX IF NOT EXISTS idx_exp_novos_lote ON expedicao_novos(lote_id);
 `);
 
 // Backward compatibility for existing databases: ensure new columns
@@ -3186,6 +3229,318 @@ app.get('/api/romaneios/:id/itens', (req, res) => {
     const itens = db.prepare("SELECT * FROM conferencias_galpao WHERE lote_romaneio_id = ? ORDER BY tipo_equipamento, codigo_bipado").all(req.params.id);
     res.json({ success: true, lote, itens });
   } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ==========================================
+// MÓDULO: EXPEDIÇÃO DE EQUIPAMENTOS NOVOS MUNICIPAIS (BNDES / PMAT)
+// ==========================================
+
+// 1. Gravar lote de equipamentos expedidos no galpão
+app.post('/api/novos/expedir', async (req, res) => {
+  try {
+    const { lote_id, localidade, secretaria = '', itens = [], usuario = 'Maycon', observacoes = '' } = req.body;
+    if (!localidade || !localidade.trim()) {
+      return res.status(400).json({ success: false, message: 'Localidade de destino é obrigatória.' });
+    }
+    if (!itens || !Array.isArray(itens) || itens.length === 0) {
+      return res.status(400).json({ success: false, message: 'Nenhum equipamento fornecido para expedição.' });
+    }
+
+    const loteIdFinal = lote_id || `LOTE_${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`;
+    const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+    const checkStmt = db.prepare('SELECT id, lote_id, localidade, data_expedicao FROM expedicao_novos WHERE patrimonio = ?');
+    const insertStmt = db.prepare(`
+      INSERT INTO expedicao_novos (
+        lote_id, localidade, secretaria, tipo, patrimonio, numero_serie, marca_modelo, origem_recurso, data_expedicao, usuario, origem_registro, observacoes
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'bipagem_galpao', ?
+      )
+    `);
+
+    const insertedIds = [];
+    const duplicados = [];
+
+    const insertTx = db.transaction((list) => {
+      for (const item of list) {
+        const pat = String(item.patrimonio || '').trim();
+        if (!pat) continue;
+        const existing = checkStmt.get(pat);
+        if (existing) {
+          duplicados.push({ patrimonio: pat, localidadeAnterior: existing.localidade, dataAnterior: existing.data_expedicao });
+        }
+        const info = insertStmt.run(
+          loteIdFinal,
+          localidade.trim(),
+          (secretaria || '').trim(),
+          (item.tipo || 'CPU').trim().toUpperCase(),
+          pat,
+          (item.numero_serie || '').trim(),
+          (item.marca_modelo || 'Lenovo ThinkCentre M75q').trim(),
+          (item.origem_recurso || 'PMAT / BNDES').trim(),
+          nowStr,
+          usuario || 'Maycon',
+          observacoes || ''
+        );
+        insertedIds.push(info.lastInsertRowid);
+      }
+    });
+
+    insertTx(itens);
+
+    if (insertedIds.length > 0) {
+      syncBatchToTurso('expedicao_novos', insertedIds).catch(err => console.error('[Turso sync error]:', err.message));
+    }
+
+    res.json({
+      success: true,
+      lote_id: loteIdFinal,
+      totalInseridos: insertedIds.length,
+      duplicados,
+      message: `${insertedIds.length} equipamentos expedidos com sucesso para ${localidade}!`
+    });
+  } catch (err) {
+    console.error('Erro em /api/novos/expedir:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 2. Importar histórico de equipamentos já entregues (planilha do outro app)
+app.post('/api/novos/importar', async (req, res) => {
+  try {
+    const { itens = [], usuario = 'Importação' } = req.body;
+    if (!itens || !Array.isArray(itens) || itens.length === 0) {
+      return res.status(400).json({ success: false, message: 'Nenhum item enviado para importação.' });
+    }
+
+    const checkStmt = db.prepare('SELECT id FROM expedicao_novos WHERE patrimonio = ?');
+    const insertStmt = db.prepare(`
+      INSERT INTO expedicao_novos (
+        lote_id, localidade, secretaria, tipo, patrimonio, numero_serie, marca_modelo, origem_recurso, data_expedicao, usuario, origem_registro, observacoes
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'importacao_planilha', ?
+      )
+    `);
+
+    let inseridos = 0;
+    let ignorados = 0;
+    const insertedIds = [];
+
+    const importTx = db.transaction((list) => {
+      for (const it of list) {
+        const pat = String(it.patrimonio || '').trim();
+        const loc = String(it.localidade || it.unidade || it.destino || 'Destino não especificado').trim();
+        if (!pat) {
+          ignorados++;
+          continue;
+        }
+
+        const existing = checkStmt.get(pat);
+        if (existing) {
+          ignorados++;
+          continue;
+        }
+
+        const loteId = it.lote_id || `IMP_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`;
+        const dataExp = it.data_expedicao || it.data || new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+        const info = insertStmt.run(
+          loteId,
+          loc,
+          String(it.secretaria || '').trim(),
+          String(it.tipo || 'CPU').trim().toUpperCase(),
+          pat,
+          String(it.numero_serie || it.serial || '').trim(),
+          String(it.marca_modelo || it.modelo || 'Lenovo ThinkCentre M75q').trim(),
+          String(it.origem_recurso || 'PMAT / BNDES').trim(),
+          dataExp,
+          usuario,
+          String(it.observacoes || '').trim()
+        );
+        insertedIds.push(info.lastInsertRowid);
+        inseridos++;
+      }
+    });
+
+    importTx(itens);
+
+    if (insertedIds.length > 0) {
+      syncBatchToTurso('expedicao_novos', insertedIds).catch(err => console.error('[Turso sync error]:', err.message));
+    }
+
+    res.json({
+      success: true,
+      inseridos,
+      ignorados,
+      message: `${inseridos} registros importados com sucesso! (${ignorados} ignorados por duplicidade ou sem patrimônio)`
+    });
+  } catch (err) {
+    console.error('Erro em /api/novos/importar:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 3. Listar equipamentos novos expedidos com filtros e paginação
+app.get('/api/novos/expedidos', (req, res) => {
+  try {
+    const { localidade = '', tipo = '', search = '', lote_id = '', page = 1, limit = 50 } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = limit === 'todas' ? 100000 : Math.max(1, parseInt(limit, 10) || 50);
+
+    let where = [];
+    let params = [];
+
+    if (localidade && localidade.trim()) {
+      where.push('LOWER(localidade) = LOWER(?)');
+      params.push(localidade.trim());
+    }
+    if (tipo && tipo.trim()) {
+      where.push('UPPER(tipo) = UPPER(?)');
+      params.push(tipo.trim());
+    }
+    if (lote_id && lote_id.trim()) {
+      where.push('lote_id = ?');
+      params.push(lote_id.trim());
+    }
+    if (search && search.trim()) {
+      const q = `%${search.trim().toLowerCase()}%`;
+      where.push('(LOWER(patrimonio) LIKE ? OR LOWER(numero_serie) LIKE ? OR LOWER(localidade) LIKE ? OR LOWER(secretaria) LIKE ? OR LOWER(marca_modelo) LIKE ?)');
+      params.push(q, q, q, q, q);
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const totalRow = db.prepare(`SELECT count(1) as total FROM expedicao_novos ${whereClause}`).get(...params);
+    const total = totalRow ? totalRow.total : 0;
+
+    const offset = (pageNum - 1) * limitNum;
+    const querySql = `
+      SELECT * FROM expedicao_novos 
+      ${whereClause} 
+      ORDER BY id DESC 
+      LIMIT ? OFFSET ?
+    `;
+    const items = db.prepare(querySql).all(...params, limitNum, offset);
+
+    res.json({
+      success: true,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+      items
+    });
+  } catch (err) {
+    console.error('Erro em /api/novos/expedidos:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 4. Resumo e KPIs gerais do módulo de novos
+app.get('/api/novos/resumo', (req, res) => {
+  try {
+    const totalExpedidos = db.prepare('SELECT count(1) as c FROM expedicao_novos').get()?.c || 0;
+    const totalCpus = db.prepare("SELECT count(1) as c FROM expedicao_novos WHERE UPPER(tipo) = 'CPU'").get()?.c || 0;
+    const totalMonitores = db.prepare("SELECT count(1) as c FROM expedicao_novos WHERE UPPER(tipo) LIKE '%MONITOR%'").get()?.c || 0;
+    const totalNotebooks = db.prepare("SELECT count(1) as c FROM expedicao_novos WHERE UPPER(tipo) = 'NOTEBOOK'").get()?.c || 0;
+    const totalLocalidades = db.prepare('SELECT count(DISTINCT localidade) as c FROM expedicao_novos').get()?.c || 0;
+
+    const ultimosLotes = db.prepare(`
+      SELECT 
+        lote_id, 
+        localidade, 
+        secretaria,
+        COUNT(1) as totalItens,
+        SUM(CASE WHEN UPPER(tipo) = 'CPU' THEN 1 ELSE 0 END) as cpus,
+        SUM(CASE WHEN UPPER(tipo) LIKE '%MONITOR%' THEN 1 ELSE 0 END) as monitores,
+        SUM(CASE WHEN UPPER(tipo) = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks,
+        data_expedicao
+      FROM expedicao_novos 
+      GROUP BY lote_id 
+      ORDER BY id DESC 
+      LIMIT 10
+    `).all();
+
+    const localidadesDisponiveis = db.prepare(`
+      SELECT DISTINCT localidade 
+      FROM expedicao_novos 
+      ORDER BY localidade ASC
+    `).all().map(r => r.localidade);
+
+    res.json({
+      success: true,
+      kpis: {
+        totalExpedidos,
+        totalCpus,
+        totalMonitores,
+        totalNotebooks,
+        totalLocalidades
+      },
+      ultimosLotes,
+      localidadesDisponiveis
+    });
+  } catch (err) {
+    console.error('Erro em /api/novos/resumo:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 5. Conciliação por localidade: Novos Expedidos vs EMC Recolhidos
+app.get('/api/novos/conciliacao-localidade', (req, res) => {
+  try {
+    const { localidade = '' } = req.query;
+    if (!localidade) {
+      return res.status(400).json({ success: false, message: 'Localidade é obrigatória.' });
+    }
+
+    const novosCpus = db.prepare("SELECT count(1) as c FROM expedicao_novos WHERE LOWER(localidade) = LOWER(?) AND UPPER(tipo) = 'CPU'").get(localidade)?.c || 0;
+    const novosMonitores = db.prepare("SELECT count(1) as c FROM expedicao_novos WHERE LOWER(localidade) = LOWER(?) AND UPPER(tipo) LIKE '%MONITOR%'").get(localidade)?.c || 0;
+    const novosNotebooks = db.prepare("SELECT count(1) as c FROM expedicao_novos WHERE LOWER(localidade) = LOWER(?) AND UPPER(tipo) = 'NOTEBOOK'").get(localidade)?.c || 0;
+
+    const emcCpus = db.prepare("SELECT count(1) as c FROM conferencias_galpao WHERE LOWER(localidade_coletada) = LOWER(?) AND UPPER(tipo_equipamento) = 'CPU'").get(localidade)?.c || 0;
+    const emcMonitores = db.prepare("SELECT count(1) as c FROM conferencias_galpao WHERE LOWER(localidade_coletada) = LOWER(?) AND UPPER(tipo_equipamento) LIKE '%MONITOR%'").get(localidade)?.c || 0;
+    const emcNotebooks = db.prepare("SELECT count(1) as c FROM conferencias_galpao WHERE LOWER(localidade_coletada) = LOWER(?) AND UPPER(tipo_equipamento) = 'NOTEBOOK'").get(localidade)?.c || 0;
+
+    res.json({
+      success: true,
+      localidade,
+      novos: {
+        cpus: novosCpus,
+        monitores: novosMonitores,
+        notebooks: novosNotebooks,
+        total: novosCpus + novosMonitores + novosNotebooks
+      },
+      emcRecolhidos: {
+        cpus: emcCpus,
+        monitores: emcMonitores,
+        notebooks: emcNotebooks,
+        total: emcCpus + emcMonitores + emcNotebooks
+      },
+      saldoPendenteRetorno: {
+        cpus: Math.max(0, novosCpus - emcCpus),
+        monitores: Math.max(0, novosMonitores - emcMonitores),
+        notebooks: Math.max(0, novosNotebooks - emcNotebooks)
+      }
+    });
+  } catch (err) {
+    console.error('Erro em /api/novos/conciliacao-localidade:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 6. Excluir item expedido
+app.delete('/api/novos/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ success: false, message: 'ID inválido.' });
+
+    db.prepare('DELETE FROM expedicao_novos WHERE id = ?').run(id);
+    syncDeleteToTurso('expedicao_novos', [id]).catch(e => console.error('[Turso delete error]:', e.message));
+
+    res.json({ success: true, message: 'Item excluído com sucesso.' });
+  } catch (err) {
+    console.error('Erro em DELETE /api/novos/:id:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
