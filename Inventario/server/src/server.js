@@ -3593,6 +3593,36 @@ const possibleDistPaths = [
 ].filter(Boolean);
 const clientDistPath = possibleDistPaths.find(p => fs.existsSync(p)) || path.resolve(__dirname, '../../dist');
 console.log(`[Static] Servindo frontend de: ${clientDistPath} (index.html: ${fs.existsSync(path.resolve(clientDistPath, 'index.html'))})`);
+
+// Rota explícita para Service Worker PWA com MIME type application/javascript obrigatório
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const possibleSw = [
+    path.resolve(clientDistPath, 'sw.js'),
+    path.resolve(__dirname, '../../dist/sw.js'),
+    path.resolve(process.cwd(), 'Inventario/dist/sw.js'),
+    path.resolve(process.cwd(), 'dist/sw.js')
+  ].find(p => fs.existsSync(p));
+  if (possibleSw) return res.sendFile(possibleSw);
+  res.status(404).send('// sw.js not found');
+});
+
+// Rotas explícitas para Web App Manifest com MIME type application/manifest+json
+app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
+  res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const possibleManifest = [
+    path.resolve(clientDistPath, 'manifest.webmanifest'),
+    path.resolve(clientDistPath, 'manifest.json'),
+    path.resolve(process.cwd(), 'Inventario/dist/manifest.webmanifest'),
+    path.resolve(process.cwd(), 'Inventario/dist/manifest.json')
+  ].find(p => fs.existsSync(p));
+  if (possibleManifest) return res.sendFile(possibleManifest);
+  res.status(404).send('{}');
+});
+
 app.use(express.static(clientDistPath));
 
 app.get('*', (req, res, next) => {

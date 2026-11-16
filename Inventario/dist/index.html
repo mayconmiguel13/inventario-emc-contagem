@@ -17,8 +17,21 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"/>
   <link rel="apple-touch-startup-image" href="/icon-512.png"/>
   <title>Coletor Inventário • EMC</title>
-  <script type="module" crossorigin src="/assets/index.coletor-BMfG-jvO.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-C3292b4z.css">
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+          .then(function(reg) {
+            console.log('[PWA] Service Worker registrado com sucesso:', reg.scope);
+          })
+          .catch(function(err) {
+            console.warn('[PWA] Erro ao registrar Service Worker:', err);
+          });
+      });
+    }
+  </script>
+  <script type="module" crossorigin src="/assets/index.coletor-aPyUCXYp.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CqXny7yA.css">
 </head>
 <body>
   <div id="root">

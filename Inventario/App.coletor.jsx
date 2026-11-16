@@ -42,6 +42,63 @@ export default function App() {
   const [contratoInitialFilter, setContratoInitialFilter] = useState({ search: '', status: '' });
   const [theme, setTheme] = useState(() => localStorage.getItem('app_theme') || 'light');
 
+  // PWA Install & Prompt Control
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+  const [showIosInstallModal, setShowIosInstallModal] = useState(false);
+
+  useEffect(() => {
+    // Detectar se já está executando como PWA instalado (standalone)
+    const isStandalone = typeof window !== 'undefined' && (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true
+    );
+    if (isStandalone) {
+      setIsAppInstalled(true);
+    }
+
+    const handleBeforeInstall = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setIsAppInstalled(true);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isIos) {
+      setShowIosInstallModal(true);
+      return;
+    }
+
+    if (deferredPrompt) {
+      try {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+          setIsAppInstalled(true);
+        }
+        setDeferredPrompt(null);
+      } catch (err) {
+        console.warn('Erro ao abrir prompt de instalação:', err);
+      }
+    } else {
+      showNotification('info', 'Para instalar, toque nos 3 pontinhos (⋮) ou botão Compartilhar do seu navegador e escolha "Instalar aplicativo" ou "Adicionar à tela inicial".', 'Instalar Aplicativo');
+    }
+  };
+
   const handleNav = (tabName, filterObj = null) => {
     if (filterObj) {
       setContratoInitialFilter(filterObj);
@@ -163,6 +220,64 @@ export default function App() {
 
   return (
     <div id="layout-wrapper" className={`${sidebarCollapsed ? 'sidebar-enable vertical-collpsed' : ''} ${mobileMenuOpen ? 'vertical-sidebar-enable' : ''}`}>
+      {/* MODAL DE AJUDA PARA INSTALAR NO IOS / SAFARI */}
+      {showIosInstallModal && (
+        <div className="modal fade show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.65)', zIndex: 1060 }} tabIndex="-1">
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content shadow-lg border-0" style={{ borderRadius: '16px' }}>
+              <div className="modal-header bg-primary text-white py-3">
+                <h5 className="modal-title fs-16 fw-bold d-flex align-items-center gap-2">
+                  <i className="ri-apple-fill fs-20"></i> Como Instalar no Celular (iPhone / iPad)
+                </h5>
+                <button
+                  type="button"
+                  className="btn-close btn-close-white"
+                  onClick={() => setShowIosInstallModal(false)}
+                  aria-label="Fechar"
+                ></button>
+              </div>
+              <div className="modal-body p-4 text-dark fs-14">
+                <p className="text-muted mb-3">
+                  Para abrir em tela cheia com a câmera ultra-rápida, instale o aplicativo na sua tela inicial:
+                </p>
+                <div className="d-flex flex-column gap-3">
+                  <div className="d-flex align-items-start gap-3 p-2 rounded bg-light border">
+                    <span className="badge bg-primary rounded-circle p-2 fs-12 fw-bold" style={{ width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>1</span>
+                    <div>
+                      <strong className="d-block text-dark">Toque em Compartilhar</strong>
+                      <span className="text-muted fs-12">No Safari, toque no ícone do quadrado com a seta para cima (<i className="ri-share-box-line fs-14"></i>) na barra inferior.</span>
+                    </div>
+                  </div>
+                  <div className="d-flex align-items-start gap-3 p-2 rounded bg-light border">
+                    <span className="badge bg-primary rounded-circle p-2 fs-12 fw-bold" style={{ width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>2</span>
+                    <div>
+                      <strong className="d-block text-dark">Adicionar à Tela de Início</strong>
+                      <span className="text-muted fs-12">Role a lista para baixo e toque em <strong>"Adicionar à Tela de Início"</strong> (<i className="ri-add-box-line fs-14"></i>).</span>
+                    </div>
+                  </div>
+                  <div className="d-flex align-items-start gap-3 p-2 rounded bg-light border">
+                    <span className="badge bg-primary rounded-circle p-2 fs-12 fw-bold" style={{ width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>3</span>
+                    <div>
+                      <strong className="d-block text-dark">Confirmar</strong>
+                      <span className="text-muted fs-12">Toque em <strong>"Adicionar"</strong> no canto superior direito. O ícone aparecerá direto na tela do seu iPhone!</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer bg-light py-2">
+                <button
+                  type="button"
+                  className="btn btn-primary rounded-pill px-4"
+                  onClick={() => setShowIosInstallModal(false)}
+                >
+                  Entendi
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* FLOATING TOAST NOTIFICATION CONTAINER (AUTO-DISMISS & MODERN GLASSMORPHISM) */}
       <div className="toast-floating-container" aria-live="polite" aria-atomic="true">
         {toast && (
@@ -329,6 +444,20 @@ export default function App() {
                 <span className="d-none d-sm-inline">Novos</span>
               </button>
 
+              {/* Botão de Instalar Aplicativo no Celular (PWA) */}
+              {!isAppInstalled && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary rounded-pill px-2 px-sm-3 d-flex align-items-center gap-1 shadow-sm"
+                  onClick={handleInstallApp}
+                  title="Instalar Aplicativo no Celular (PWA)"
+                >
+                  <i className="ri-download-2-line fs-14"></i>
+                  <span className="fw-bold d-none d-sm-inline">Instalar App</span>
+                  <span className="fw-bold d-inline d-sm-none">Instalar</span>
+                </button>
+              )}
+
               {/* Alternância de Modo Claro / Escuro (Velzon Dark Mode) */}
               <button
                 type="button"
@@ -489,6 +618,17 @@ export default function App() {
                   <i className="ri-inbox-unarchive-line text-success"></i>
                   <span>Expedição de Novos (Município)</span>
                   <span className="badge badge-pill badge-soft-success ms-auto">NOVOS</span>
+                </a>
+              </li>
+
+              <li className="nav-item">
+                <a
+                  className="nav-link menu-link text-info"
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); handleInstallApp(); }}
+                >
+                  <i className="ri-download-cloud-2-line text-info"></i>
+                  <span className="fw-semibold">{isAppInstalled ? '✓ App Instalado' : 'Instalar no Celular (PWA)'}</span>
                 </a>
               </li>
 
@@ -9292,6 +9432,97 @@ function RotasColetaView({ onNavigate, notify }) {
 // ==========================================
 // MÓDULO: EXPEDIÇÃO DE EQUIPAMENTOS NOVOS MUNICIPAIS (BNDES / PMAT)
 // ==========================================
+function parseMunicipalBarcode(rawCode) {
+  if (!rawCode) return { valid: false, reason: 'empty', message: 'Código vazio.' };
+
+  let clean = String(rawCode).trim().toUpperCase();
+
+  // 1. Remover prefixos de leitura comuns
+  clean = clean.replace(/^(PMC|PREFEITURA|PATRIMONIO|PAT|PATR)[s-_.:]*/i, '').trim();
+
+  // 2. Telefone da etiqueta EMC ou de suporte descartado
+  const onlyDigits = clean.replace(/\D/g, '');
+  if (onlyDigits === '21212121' || onlyDigits === '3121212121') {
+    return {
+      valid: false,
+      reason: 'phone',
+      message: 'Telefone descartado. Foque nas barras do patrimônio!'
+    };
+  }
+
+  // 3. Etiqueta Lenovo ThinkCentre M75q (ex: "M75q (1S)MT-M13E0-S00400 S/N PE0FPFRT" ou "1SMT...PE0FPFRT")
+  if (clean.includes('S/N') || (clean.startsWith('1S') && clean.length >= 10)) {
+    let serial = '';
+    let modelo = 'Lenovo ThinkCentre M75q';
+    if (clean.includes('S/N')) {
+      const parts = clean.split('S/N');
+      serial = parts[parts.length - 1].trim().replace(/[^A-Z0-9]/g, '');
+    } else if (clean.startsWith('1S')) {
+      serial = clean.slice(-8).replace(/[^A-Z0-9]/g, '');
+    }
+    return {
+      valid: true,
+      code: serial || clean,
+      serial: serial || clean,
+      modelo,
+      type: 'serial_lenovo',
+      label: 'S/N Lenovo ThinkCentre M75q',
+      isMunicipal: true
+    };
+  }
+
+  // 4. Patrimônio Municipal de Contagem (ex: 100039491 da foto BNDES / PMAT do usuário)
+  // Normalmente 7 a 10 dígitos numéricos
+  if (/^\d{7,10}$/.test(clean)) {
+    return {
+      valid: true,
+      code: clean,
+      type: 'patrimonio_municipal',
+      label: 'Patrimônio Municipal (PMAT / BNDES)',
+      isMunicipal: true
+    };
+  }
+
+  // 5. Patrimônio curto (5 a 6 dígitos)
+  if (/^\d{5,6}$/.test(clean)) {
+    return {
+      valid: true,
+      code: clean,
+      type: 'patrimonio_num',
+      label: 'Patrimônio',
+      isMunicipal: true
+    };
+  }
+
+  // 6. Dell Service Tag (7 caracteres alfanuméricos, muito comum em monitores Dell)
+  if (/^[A-Z0-9]{7}$/.test(clean) && /[A-Z]/.test(clean)) {
+    return {
+      valid: true,
+      code: clean,
+      type: 'service_tag',
+      label: 'Dell Service Tag (Monitor)',
+      isMunicipal: true
+    };
+  }
+
+  // 7. Qualquer outro código de barras válido na etiqueta
+  if (clean.length >= 3 && clean.length <= 32) {
+    return {
+      valid: true,
+      code: clean,
+      type: 'geral',
+      label: 'Código de Ativo',
+      isMunicipal: true
+    };
+  }
+
+  return {
+    valid: false,
+    reason: 'invalid_format',
+    message: `Código lido (${clean}) não reconhecido.`
+  };
+}
+
 function ExpedicaoNovosView({ notify, onNavigate }) {
   const [activeSubTab, setActiveSubTab] = useState('bipagem'); // 'bipagem' | 'historico' | 'conciliacao' | 'importar'
   
@@ -9305,6 +9536,30 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [loteItens, setLoteItens] = useState([]); // itens no lote atual em montagem
   const [salvandoLote, setSalvandoLote] = useState(false);
   const [ultimoBipado, setUltimoBipado] = useState(null);
+
+  // Câmera Scanner ao Vivo (PWA / Mobile)
+  const [isScanning, setIsScanning] = useState(false);
+  const [availableCameras, setAvailableCameras] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [hasTorch, setHasTorch] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const [hasZoom, setHasZoom] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomMinMax, setZoomMinMax] = useState({ min: 1, max: 3, step: 0.1 });
+  const [flashFeedback, setFlashFeedback] = useState(null); // 'success' | 'warning' | 'duplicate'
+  const [duplicateAlert, setDuplicateAlert] = useState(null);
+  const [cameraError, setCameraError] = useState(null);
+
+  // Refs de controle de câmera e debounce de leitura
+  const html5QrCodeRef = useRef(null);
+  const lastScannedCodeRef = useRef('');
+  const lastScannedTimeRef = useRef(0);
+  const candidateRef = useRef({ code: '', count: 0, time: 0 }); // Consenso duplo (anti-falso positivo)
+  const isProcessingRef = useRef(false);
+  const loteItensRef = useRef(loteItens);
+  loteItensRef.current = loteItens;
+  const inputRef = useRef(null);
+  const audioContextRef = useRef(null);
 
   // Histórico e Resumo
   const [resumo, setResumo] = useState(null);
@@ -9325,16 +9580,11 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [termoModalLote, setTermoModalLote] = useState(null);
 
   // Importador
-  const [importFile, setImportFile] = useState(null);
   const [importJsonText, setImportJsonText] = useState('');
   const [importando, setImportando] = useState(false);
   const [importResultado, setImportResultado] = useState(null);
 
-  // Refs
-  const inputRef = useRef(null);
-  const audioContextRef = useRef(null);
-
-  // Som de bip usando Web Audio API
+  // Som de bip sonoro com Web Audio API
   const playBeep = (type = 'success') => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -9350,15 +9600,15 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
       if (type === 'success') {
         osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
-        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
         osc.start(ctx.currentTime);
         osc.stop(ctx.currentTime + 0.12);
       } else {
         // Alerta de duplicidade / erro
         osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(220, ctx.currentTime); // A3
-        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        osc.frequency.setValueAtTime(220, ctx.currentTime); // A3 grave
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
         osc.start(ctx.currentTime);
         osc.stop(ctx.currentTime + 0.35);
@@ -9406,18 +9656,18 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     fetchExpedidos(1);
   }, []);
 
-  // Foco permanente no input de bipagem
+  // Foco permanente no input de bipagem quando em modo manual
   useEffect(() => {
-    if (activeSubTab === 'bipagem') {
+    if (activeSubTab === 'bipagem' && !isScanning) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [activeSubTab, tipoAtivo]);
+  }, [activeSubTab, tipoAtivo, isScanning]);
 
-  // Submissão do código bipado
-  const handleBipar = (e) => {
-    if (e) e.preventDefault();
-    const raw = (barcodeInput || '').trim();
-    if (!raw) return;
+  // Registro de código no lote atual com validação de duplicidade
+  const handleRegisterCodeNovos = (parseResult, forceAllow = false) => {
+    if (!parseResult) return;
+    const clean = parseResult.code || String(parseResult).trim().toUpperCase();
+    if (!clean) return;
 
     if (!localidade.trim()) {
       playBeep('error');
@@ -9425,46 +9675,257 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       return;
     }
 
-    // Normalização inteligente do código:
-    // Ex: "M75q (1S)MT-M13E0-S00400 S/N PE0FPFRT" -> detecta serial
-    let patrimonio = raw;
-    let serial = '';
-
-    if (raw.includes('S/N')) {
-      const parts = raw.split('S/N');
-      serial = parts[1].trim();
-      patrimonio = serial; // se só bipou o adesivo de série
-    } else if (raw.startsWith('1S') && raw.length >= 8) {
-      serial = raw.slice(-8); // lenovo S/N
-    }
-
-    // Checa se já está no lote atual
-    const jaNoLote = loteItens.some(
-      (it) => it.patrimonio.toUpperCase() === patrimonio.toUpperCase()
+    // Trava de Duplicidade no Lote Atual
+    const jaNoLote = loteItensRef.current.some(
+      (it) => it.patrimonio.toUpperCase() === clean || (it.numero_serie && it.numero_serie.toUpperCase() === clean)
     );
-    if (jaNoLote) {
+
+    if (jaNoLote && !forceAllow) {
       playBeep('error');
-      if (notify) notify('danger', `Atenção: O patrimônio/serial "${patrimonio}" já foi bipado neste lote!`);
-      setBarcodeInput('');
+      if (navigator.vibrate) {
+        try { navigator.vibrate([100, 50, 100]); } catch (e) {}
+      }
+      setFlashFeedback('duplicate');
+      setTimeout(() => setFlashFeedback(null), 1000);
+
+      setDuplicateAlert({
+        codigo: clean,
+        message: `Equipamento ${clean} já foi adicionado a este lote!`
+      });
+      setTimeout(() => {
+        setDuplicateAlert((curr) => (curr && curr.codigo === clean ? null : curr));
+      }, 5000);
       return;
     }
 
+    // Sucesso! Bip sonoro agradável e vibração
+    playBeep('success');
+    if (navigator.vibrate) {
+      try { navigator.vibrate([60, 40, 60]); } catch (e) {}
+    }
+    setFlashFeedback('success');
+    setTimeout(() => setFlashFeedback(null), 600);
+
+    const nowTime = new Date().toLocaleTimeString('pt-BR');
+    const serial = parseResult.serial || '';
+    const modelo = parseResult.modelo || marcaModelo;
+
     const novoItem = {
-      id: Date.now() + Math.random(),
-      patrimonio,
+      id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      patrimonio: clean,
       numero_serie: serial,
       tipo: tipoAtivo,
-      marca_modelo: marcaModelo,
-      origem_recurso: origemRecurso,
-      hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      marca_modelo: modelo,
+      origem_recurso: origemRecurso || 'PMAT / BNDES',
+      hora: nowTime,
+      tipoEtiqueta: parseResult.label || 'Patrimônio Municipal'
     };
 
-    setLoteItens((prev) => [novoItem, ...prev]);
     setUltimoBipado(novoItem);
-    playBeep('success');
-    setBarcodeInput('');
+    setDuplicateAlert(null);
+    setLoteItens((prev) => [novoItem, ...prev]);
+  };
 
-    // Re-foca imediatamente para o próximo
+  // Callback de detecção pela Câmera com Consenso Duplo
+  const onBarcodeDetected = (decodedText) => {
+    if (!decodedText || isProcessingRef.current) return;
+    const now = Date.now();
+
+    // 1. Analisar código usando o parser municipal
+    const parseResult = parseMunicipalBarcode(decodedText);
+    if (!parseResult.valid) {
+      return;
+    }
+
+    const clean = parseResult.code;
+
+    // Cooldown de 3 segundos para o mesmo código consecutivo
+    if (clean === lastScannedCodeRef.current && (now - lastScannedTimeRef.current < 3000)) {
+      return;
+    }
+
+    // 2. Filtro de Consenso Duplo (exige 2 frames idênticos em 500ms para evitar leitura borrada)
+    const cand = candidateRef.current;
+    if (cand.code === clean && (now - cand.time < 500)) {
+      cand.count += 1;
+    } else {
+      candidateRef.current = { code: clean, count: 1, time: now };
+      return;
+    }
+
+    if (cand.count < 2) {
+      return;
+    }
+
+    candidateRef.current = { code: '', count: 0, time: 0 };
+    lastScannedCodeRef.current = clean;
+    lastScannedTimeRef.current = now;
+
+    handleRegisterCodeNovos(parseResult);
+  };
+
+  // Ligar Câmera com alta precisão
+  const startCamera = async (camId) => {
+    setCameraError(null);
+    try {
+      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+        await html5QrCodeRef.current.stop();
+      }
+
+      const scanner = new Html5Qrcode("camera-reader-novos", {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.ITF,
+          Html5QrcodeSupportedFormats.UPC_A
+        ],
+        verbose: false,
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: true
+        }
+      });
+      html5QrCodeRef.current = scanner;
+
+      const cameraConfig = camId ? camId : { facingMode: "environment" };
+
+      await scanner.start(
+        cameraConfig,
+        {
+          fps: 15,
+          qrbox: (viewfinderWidth, viewfinderHeight) => {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const boxSize = Math.max(220, Math.min(Math.floor(minEdge * 0.85), 340));
+            return { width: boxSize, height: boxSize };
+          },
+          aspectRatio: 1.0,
+          videoConstraints: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280, min: 640 },
+            height: { ideal: 720, min: 480 },
+            focusMode: { ideal: "continuous" }
+          }
+        },
+        onBarcodeDetected,
+        () => {}
+      );
+
+      setIsScanning(true);
+
+      // Detectar lanterna e zoom
+      try {
+        const track = scanner.getRunningTrackCameraCapabilities();
+        if (track) {
+          if (typeof track.torchFeature === 'function' && track.torchFeature().isSupported()) {
+            setHasTorch(true);
+          }
+          if (typeof track.zoomFeature === 'function' && track.zoomFeature().isSupported()) {
+            const zf = track.zoomFeature();
+            setHasZoom(true);
+            setZoomMinMax({ min: zf.min() || 1, max: Math.min(zf.max() || 4, 3), step: zf.step() || 0.1 });
+            setZoomLevel(zf.value() || 1);
+          }
+        }
+      } catch (e) {
+        try {
+          const video = document.querySelector("#camera-reader-novos video");
+          const track = video?.srcObject?.getVideoTracks?.()[0];
+          const caps = track?.getCapabilities?.() || {};
+          if (caps.torch) setHasTorch(true);
+          if (caps.zoom) {
+            setHasZoom(true);
+            setZoomMinMax({ min: caps.zoom.min || 1, max: Math.min(caps.zoom.max || 4, 3), step: caps.zoom.step || 0.1 });
+          }
+        } catch (err2) {}
+      }
+    } catch (err) {
+      console.error('Erro ao ligar câmera no módulo novos:', err);
+      setCameraError('Permissão de câmera negada ou dispositivo indisponível. Você pode usar a entrada manual abaixo.');
+      setIsScanning(false);
+    }
+  };
+
+  const stopCamera = async () => {
+    if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+      try {
+        await html5QrCodeRef.current.stop();
+      } catch (e) {}
+    }
+    setIsScanning(false);
+    setTorchOn(false);
+    setDuplicateAlert(null);
+  };
+
+  const toggleTorch = async () => {
+    if (!html5QrCodeRef.current) return;
+    try {
+      const nextTorch = !torchOn;
+      await html5QrCodeRef.current.applyVideoConstraints({
+        advanced: [{ torch: nextTorch }]
+      });
+      setTorchOn(nextTorch);
+    } catch (e) {
+      console.warn('Torch não suportado:', e);
+    }
+  };
+
+  const handleZoomChange = async (newZoom) => {
+    setZoomLevel(newZoom);
+    if (!html5QrCodeRef.current) return;
+    try {
+      await html5QrCodeRef.current.applyVideoConstraints({
+        advanced: [{ zoom: Number(newZoom) }]
+      });
+    } catch (e) {
+      try {
+        const video = document.querySelector("#camera-reader-novos video");
+        const track = video?.srcObject?.getVideoTracks?.()[0];
+        if (track && track.applyConstraints) {
+          await track.applyConstraints({ advanced: [{ zoom: Number(newZoom) }] });
+        }
+      } catch (err2) {}
+    }
+  };
+
+  // Inicializar lista de câmeras disponíveis
+  useEffect(() => {
+    Html5Qrcode.getCameras()
+      .then((devices) => {
+        if (devices && devices.length > 0) {
+          setAvailableCameras(devices);
+          const backCam = devices.find(
+            (d) => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('traseira') || d.label.toLowerCase().includes('rear')
+          );
+          setSelectedCameraId(backCam ? backCam.id : devices[0].id);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+        try { html5QrCodeRef.current.stop(); } catch (e) {}
+      }
+    };
+  }, []);
+
+  // Ao trocar de subaba, desligar câmera
+  useEffect(() => {
+    if (activeSubTab !== 'bipagem') {
+      stopCamera();
+    }
+  }, [activeSubTab]);
+
+  // Submissão manual pelo input de texto
+  const handleBiparManual = (e) => {
+    if (e) e.preventDefault();
+    const raw = (barcodeInput || '').trim();
+    if (!raw) return;
+
+    const parsed = parseMunicipalBarcode(raw);
+    handleRegisterCodeNovos(parsed);
+    setBarcodeInput('');
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
@@ -9499,15 +9960,15 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
     setSalvandoLote(true);
     try {
-      const loteId = `LOTE_${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`;
+      const loteId = `LOTE_NOVOS_${Date.now()}`;
       const payload = {
         lote_id: loteId,
         localidade: localidade.trim(),
-        secretaria: secretaria.trim(),
-        usuario: 'Maycon',
+        secretaria: secretaria.trim() || null,
+        usuario: 'Almoxarifado / Galpão',
         itens: loteItens.map((it) => ({
           patrimonio: it.patrimonio,
-          numero_serie: it.numero_serie,
+          numero_serie: it.numero_serie || null,
           tipo: it.tipo,
           marca_modelo: it.marca_modelo,
           origem_recurso: it.origem_recurso
@@ -9522,18 +9983,16 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       const data = await res.json();
 
       if (data.success) {
-        if (notify) notify('success', `Lote gravado com sucesso! ${data.totalInseridos} equipamentos registrados para ${localidade}.`);
-        
-        // Abre o modal de termo para impressão se desejar
+        if (notify) notify('success', data.message || 'Saída expedida com sucesso!');
+        // Abre o modal de termo com os itens gravados
         setTermoModalLote({
           lote_id: loteId,
           localidade: localidade.trim(),
-          secretaria: secretaria.trim(),
-          data: new Date().toLocaleDateString('pt-BR'),
+          secretaria: secretaria.trim() || '',
+          data_expedicao: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR'),
+          usuario: 'Almoxarifado / Galpão',
           itens: [...loteItens]
         });
-
-        // Limpa o lote atual
         setLoteItens([]);
         setUltimoBipado(null);
         fetchResumo();
@@ -9610,7 +10069,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       if (importJsonText.trim().startsWith('[')) {
         rows = JSON.parse(importJsonText);
       } else {
-        // Parse CSV simples
         const lines = importJsonText.trim().split('\n');
         if (lines.length > 1) {
           const headers = lines[0].split(/[;,\t]/).map((h) => h.trim().toLowerCase());
@@ -9782,7 +10240,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
         {/* 3. CONTEÚDO DA SUB-ABA ATIVA */}
         <div className="card-body p-3 p-md-4">
           {/* ========================================================= */}
-          {/* ABA 1: BIPAGEM CONTÍNUA / EXPEDIÇÃO EM LOTE */}
+          {/* ABA 1: BIPAGEM CONTÍNUA COM CÂMERA AO VIVO */}
           {/* ========================================================= */}
           {activeSubTab === 'bipagem' && (
             <div className="d-flex flex-column gap-3">
@@ -9800,16 +10258,16 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                       placeholder="Ex: CRAS Industrial, SEDE, E.M. Heitor Villa Lobos..."
                       value={localidade}
                       onChange={(e) => setLocalidade(e.target.value)}
-                      list="localidades-datalist"
+                      list="localidades-datalist-novos"
                       autoComplete="off"
                     />
-                    <datalist id="localidades-datalist">
+                    <datalist id="localidades-datalist-novos">
                       {(resumo?.localidadesDisponiveis || []).map((loc) => (
                         <option key={loc} value={loc} />
                       ))}
                     </datalist>
                     <small className="text-muted fs-11">
-                      Você pode selecionar uma localidade existente ou digitar um novo nome livremente.
+                      Escolha uma localidade ou digite o nome do destino das máquinas.
                     </small>
                   </div>
 
@@ -9840,124 +10298,345 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 </div>
               </div>
 
-              {/* Seção 2: Seletor de Tipo e Caixa de Bipagem Rápida */}
-              <div className="p-3 rounded border bg-white shadow-sm">
-                <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-                  <div>
-                    <span className="fs-12 text-muted fw-semibold text-uppercase d-block">Passo 2: Selecione o Tipo que vai Bipar</span>
-                    <span className="fs-14 fw-bold text-dark">
-                      Bipando agora: <span className="text-primary">{tipoAtivo}</span>
+              {/* Seção 2: Seletor Rápido de Tipo em 1 Clique */}
+              <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 p-2 bg-white rounded border shadow-xs">
+                <div className="d-flex align-items-center gap-2">
+                  <span className="fs-12 text-muted fw-bold text-uppercase">Tipo a Bipar:</span>
+                  <span className="badge bg-primary text-white fs-12 font-monospace px-2 py-1">
+                    {tipoAtivo}
+                  </span>
+                </div>
+
+                <div className="btn-group" role="group">
+                  <button
+                    type="button"
+                    className={`btn btn-md px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
+                      tipoAtivo === 'CPU' ? 'btn-primary shadow-xs' : 'btn-outline-primary'
+                    }`}
+                    onClick={() => {
+                      setTipoAtivo('CPU');
+                      setMarcaModelo('Lenovo ThinkCentre M75q');
+                    }}
+                  >
+                    <i className="ri-computer-line fs-18"></i>
+                    <span>💻 CPU / Desktop</span>
+                    <span className="badge bg-white text-primary rounded-pill font-monospace fs-11 ms-1">
+                      {loteStats.cpus}
                     </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`btn btn-md px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
+                      tipoAtivo === 'MONITOR' ? 'btn-info text-white shadow-xs' : 'btn-outline-info'
+                    }`}
+                    onClick={() => {
+                      setTipoAtivo('MONITOR');
+                      setMarcaModelo('Monitor Dell / Lenovo');
+                    }}
+                  >
+                    <i className="ri-tv-line fs-18"></i>
+                    <span>🖥️ Monitor</span>
+                    <span className="badge bg-white text-info rounded-pill font-monospace fs-11 ms-1">
+                      {loteStats.monitores}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`btn btn-md px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
+                      tipoAtivo === 'NOTEBOOK' ? 'btn-warning text-dark shadow-xs' : 'btn-outline-warning'
+                    }`}
+                    onClick={() => {
+                      setTipoAtivo('NOTEBOOK');
+                      setMarcaModelo('Notebook');
+                    }}
+                  >
+                    <i className="ri-macbook-line fs-18"></i>
+                    <span>💼 Notebook</span>
+                    <span className="badge bg-white text-dark rounded-pill font-monospace fs-11 ms-1">
+                      {loteStats.notebooks}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Seção 3: Leitor Óptico com CÂMERA AO VIVO (IGUAL AO COLETOR EMC) */}
+              <div className="card border shadow-sm mb-0">
+                <div className="card-header bg-dark text-white d-flex align-items-center justify-content-between py-2 flex-wrap gap-2">
+                  <div className="d-flex align-items-center gap-2">
+                    <span className={`badge ${isScanning ? 'bg-success' : 'bg-secondary'} rounded-pill`}>
+                      {isScanning ? '● CÂMERA AO VIVO (HD 720p)' : '○ CÂMERA DESLIGADA'}
+                    </span>
+                    <span className="fs-12 text-light d-none d-sm-inline">Foco Contínuo Municipal</span>
                   </div>
 
-                  {/* Botões Grandes de Seleção de Tipo */}
-                  <div className="btn-group" role="group">
-                    <button
-                      type="button"
-                      className={`btn btn-lg px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
-                        tipoAtivo === 'CPU' ? 'btn-primary shadow-xs' : 'btn-outline-secondary'
-                      }`}
-                      onClick={() => {
-                        setTipoAtivo('CPU');
-                        if (marcaModelo.includes('Monitor')) setMarcaModelo('Lenovo ThinkCentre M75q');
-                      }}
-                    >
-                      <i className="ri-computer-line fs-18"></i>
-                      <span>CPU</span>
-                      {loteStats.cpus > 0 && (
-                        <span className="badge bg-white text-primary rounded-pill font-monospace fs-11">
-                          {loteStats.cpus}
-                        </span>
-                      )}
-                    </button>
+                  <div className="d-flex align-items-center gap-1 flex-wrap">
+                    {/* Seletor de Câmeras */}
+                    {availableCameras.length > 1 && (
+                      <select
+                        className="form-select form-select-sm bg-dark text-white border-secondary me-1 py-0 fs-11"
+                        style={{ width: 'auto', height: '28px' }}
+                        value={selectedCameraId}
+                        onChange={(e) => {
+                          setSelectedCameraId(e.target.value);
+                          if (isScanning) {
+                            stopCamera().then(() => startCamera(e.target.value));
+                          }
+                        }}
+                      >
+                        {availableCameras.map((cam) => (
+                          <option key={cam.id} value={cam.id}>
+                            {cam.label || `Câmera ${cam.id.substring(0, 5)}`}
+                          </option>
+                        ))}
+                      </select>
+                    )}
 
-                    <button
-                      type="button"
-                      className={`btn btn-lg px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
-                        tipoAtivo === 'MONITOR' ? 'btn-info text-white shadow-xs' : 'btn-outline-secondary'
-                      }`}
-                      onClick={() => {
-                        setTipoAtivo('MONITOR');
-                        if (marcaModelo.includes('M75q')) setMarcaModelo('Monitor Dell');
-                      }}
-                    >
-                      <i className="ri-tv-line fs-18"></i>
-                      <span>Monitor</span>
-                      {loteStats.monitores > 0 && (
-                        <span className="badge bg-white text-info rounded-pill font-monospace fs-11">
-                          {loteStats.monitores}
-                        </span>
-                      )}
-                    </button>
+                    {/* Hardware Zoom */}
+                    {hasZoom && isScanning && (
+                      <div className="btn-group btn-group-sm me-1" role="group">
+                        {[1, 1.5, 2, 2.5].filter(z => z <= (zoomMinMax.max || 3)).map((z) => (
+                          <button
+                            key={z}
+                            type="button"
+                            className={`btn btn-xs ${zoomLevel === z ? 'btn-primary fw-bold' : 'btn-outline-light'}`}
+                            onClick={() => handleZoomChange(z)}
+                            title={`Zoom ${z}x`}
+                          >
+                            {z}x
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
-                    <button
-                      type="button"
-                      className={`btn btn-lg px-3 py-2 fw-bold d-flex align-items-center gap-2 ${
-                        tipoAtivo === 'NOTEBOOK' ? 'btn-success shadow-xs' : 'btn-outline-secondary'
-                      }`}
-                      onClick={() => setTipoAtivo('NOTEBOOK')}
-                    >
-                      <i className="ri-macbook-line fs-18"></i>
-                      <span>Notebook</span>
-                      {loteStats.notebooks > 0 && (
-                        <span className="badge bg-white text-success rounded-pill font-monospace fs-11">
-                          {loteStats.notebooks}
-                        </span>
-                      )}
-                    </button>
+                    {/* Lanterna / Flash */}
+                    {hasTorch && isScanning && (
+                      <button
+                        type="button"
+                        className={`btn btn-sm btn-icon ${torchOn ? 'btn-warning' : 'btn-outline-light'}`}
+                        onClick={toggleTorch}
+                        title="Alternar Lanterna / Flash"
+                      >
+                        <i className="ri-flashlight-line fs-14"></i>
+                      </button>
+                    )}
+
+                    {/* Botão Ligar/Desligar Câmera */}
+                    {isScanning ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger px-3 py-1 d-flex align-items-center gap-1 fw-bold"
+                        onClick={stopCamera}
+                      >
+                        <i className="ri-stop-circle-line"></i> Pausar Câmera
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-success px-3 py-1 d-flex align-items-center gap-1 fw-bold"
+                        onClick={() => startCamera(selectedCameraId)}
+                      >
+                        <i className="ri-camera-lens-line"></i> Iniciar Câmera
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* Campo de Entrada de Bipagem Contínua */}
-                <form onSubmit={handleBipar}>
-                  <div className="input-group input-group-lg">
-                    <span className="input-group-text bg-primary text-white">
-                      <i className="ri-barcode-box-line fs-20"></i>
-                    </span>
-                    <input
-                      ref={inputRef}
-                      type="text"
-                      className="form-control font-monospace fw-bold fs-16"
-                      placeholder={`Bipe a etiqueta de patrimônio ou serial do ${tipoAtivo} (Enter automático)...`}
-                      value={barcodeInput}
-                      onChange={(e) => setBarcodeInput(e.target.value)}
-                      autoFocus
-                    />
-                    <button type="submit" className="btn btn-primary fw-bold px-4">
-                      <i className="ri-add-line me-1"></i> Bipar
+                <div
+                  className="card-body p-0 bg-dark text-center position-relative overflow-hidden"
+                  style={{
+                    minHeight: '340px',
+                    transition: 'box-shadow 0.15s ease',
+                    boxShadow: flashFeedback === 'success'
+                      ? 'inset 0 0 0 10px #0ab39c, 0 0 40px #0ab39c'
+                      : flashFeedback === 'duplicate'
+                      ? 'inset 0 0 0 12px #ff9800, 0 0 45px #ff9800'
+                      : 'none'
+                  }}
+                >
+                  {/* Container do Scanner da Câmera */}
+                  <div
+                    id="camera-reader-novos"
+                    style={{ width: '100%', minHeight: '340px', background: '#000' }}
+                  ></div>
+
+                  {/* Contador Flutuante no Topo do Viewfinder */}
+                  <div
+                    className="position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill bg-dark bg-opacity-75 text-white fs-12 fw-bold shadow-sm d-flex align-items-center gap-2"
+                    style={{ zIndex: 6, backdropFilter: 'blur(6px)', border: '1px solid rgba(255,255,255,0.2)' }}
+                  >
+                    <span className="badge bg-success font-monospace">{loteItens.length}</span>
+                    <span>no Lote Atual</span>
+                    <span className="badge bg-primary font-monospace ms-1">{tipoAtivo}</span>
+                  </div>
+
+                  {/* Mira Óptica com Retículo de 4 Cantos e Guias Horizontal + Vertical */}
+                  {isScanning && (
+                    <div
+                      className="position-absolute top-50 start-50 translate-middle pointer-events-none"
+                      style={{
+                        width: '250px',
+                        height: '250px',
+                        border: '1.5px dashed rgba(255, 255, 255, 0.45)',
+                        borderRadius: '16px',
+                        zIndex: 4,
+                        boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.42)'
+                      }}
+                    >
+                      {/* Cantos Verdes de Enquadramento */}
+                      <div style={{ position: 'absolute', top: '-2px', left: '-2px', width: '22px', height: '22px', borderTop: '4px solid #10b981', borderLeft: '4px solid #10b981', borderTopLeftRadius: '14px' }}></div>
+                      <div style={{ position: 'absolute', top: '-2px', right: '-2px', width: '22px', height: '22px', borderTop: '4px solid #10b981', borderRight: '4px solid #10b981', borderTopRightRadius: '14px' }}></div>
+                      <div style={{ position: 'absolute', bottom: '-2px', left: '-2px', width: '22px', height: '22px', borderBottom: '4px solid #10b981', borderLeft: '4px solid #10b981', borderBottomLeftRadius: '14px' }}></div>
+                      <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', width: '22px', height: '22px', borderBottom: '4px solid #10b981', borderRight: '4px solid #10b981', borderBottomRightRadius: '14px' }}></div>
+
+                      {/* Guia Laser Vermelho Central */}
+                      <div style={{ position: 'absolute', top: '50%', left: '8px', right: '8px', height: '2px', background: 'rgba(239, 68, 68, 0.9)', boxShadow: '0 0 8px #ef4444' }}></div>
+                      <div style={{ position: 'absolute', left: '50%', top: '8px', bottom: '8px', width: '1px', background: 'rgba(239, 68, 68, 0.45)' }}></div>
+
+                      {/* Legenda de Orientação */}
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: '-24px',
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          fontSize: '11px',
+                          color: '#34d399',
+                          fontWeight: 700,
+                          letterSpacing: '0.5px',
+                          whiteSpace: 'nowrap',
+                          textShadow: '0 1px 3px rgba(0,0,0,0.95)'
+                        }}
+                      >
+                        FOQUE O PATRIMÔNIO (PMAT / BNDES / SÉRIE)
+                      </span>
+
+                      <span
+                        style={{
+                          position: 'absolute',
+                          bottom: '6px',
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          fontSize: '10px',
+                          color: 'rgba(255,255,255,0.85)',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                          textShadow: '0 1px 3px rgba(0,0,0,0.95)'
+                        }}
+                      >
+                        Lê na Horizontal e Vertical
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Banner Flutuante de Feedback Imediato */}
+                  {flashFeedback && (
+                    <div
+                      className={`position-absolute top-0 start-0 end-0 p-3 text-white fw-bold text-center fs-16 shadow ${
+                        flashFeedback === 'success'
+                          ? 'bg-success'
+                          : flashFeedback === 'duplicate'
+                          ? 'bg-warning text-dark border-bottom border-dark'
+                          : 'bg-danger'
+                      }`}
+                      style={{ zIndex: 10 }}
+                    >
+                      <i className={`ri-${flashFeedback === 'success' ? 'checkbox-circle-fill' : 'lock-2-fill'} me-2 fs-18`}></i>
+                      {flashFeedback === 'duplicate'
+                        ? `⚠️ ATENÇÃO: Equipamento ${lastScannedCodeRef.current} já foi adicionado a este lote!`
+                        : ultimoBipado
+                        ? `✓ ${ultimoBipado.patrimonio} (${ultimoBipado.tipo}) Adicionado à Lista!`
+                        : '✓ EQUIPAMENTO ADICIONADO COM SUCESSO!'}
+                    </div>
+                  )}
+
+                  {/* Estado Ocioso: Botão de Ativar Leitor */}
+                  {!isScanning && (
+                    <div
+                      className="position-absolute top-50 start-50 translate-middle text-center w-100 p-4"
+                      style={{ zIndex: 5 }}
+                    >
+                      <div className="avatar-lg rounded-circle bg-soft-success mx-auto d-flex align-items-center justify-content-center text-success fs-36 mb-3">
+                        <i className="ri-qr-scan-2-line"></i>
+                      </div>
+                      <h5 className="text-white fs-16 mb-2">Câmera Pronta para Escaneamento</h5>
+                      <p className="text-muted fs-12 mb-3" style={{ maxWidth: '420px', margin: '0 auto' }}>
+                        Toque no botão abaixo para ativar a câmera do celular. Aponte para a etiqueta branca de patrimônio da Prefeitura (PMAT / BNDES): o leitor adiciona à lista com bip sonoro e trava de duplicidade!
+                      </p>
+                      <button
+                        type="button"
+                        className="btn btn-success btn-lg rounded-pill px-4 shadow"
+                        onClick={() => startCamera(selectedCameraId)}
+                      >
+                        <i className="ri-camera-fill me-2"></i> Ativar Leitor Óptico (Câmera)
+                      </button>
+                    </div>
+                  )}
+
+                  {cameraError && (
+                    <div className="alert alert-warning m-3 text-start fs-12" role="alert">
+                      <i className="ri-error-warning-line me-1"></i> {cameraError}
+                    </div>
+                  )}
+                </div>
+
+                {/* Alerta de Duplicidade */}
+                {duplicateAlert && (
+                  <div className="alert alert-warning border border-warning shadow-sm mx-3 mt-3 mb-0 p-2 d-flex align-items-center justify-content-between">
+                    <div className="d-flex align-items-center gap-2">
+                      <i className="ri-lock-2-line fs-18 text-warning"></i>
+                      <span className="fs-12 fw-bold text-dark">{duplicateAlert.message}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-link text-dark p-0 text-decoration-none"
+                      onClick={() => setDuplicateAlert(null)}
+                    >
+                      <i className="ri-close-line fs-16"></i>
                     </button>
                   </div>
-                </form>
-
-                {/* Banner de Feedback do Último Item Bipado */}
-                {ultimoBipado && (
-                  <div className="alert alert-success mt-3 mb-0 py-2 px-3 d-flex align-items-center justify-content-between border-success-subtle">
-                    <div className="d-flex align-items-center gap-2">
-                      <i className="ri-checkbox-circle-fill fs-18 text-success"></i>
-                      <div>
-                        <strong className="text-dark">Bipado com sucesso:</strong>{' '}
-                        <span className="font-monospace fw-bold text-success fs-14">{ultimoBipado.patrimonio}</span>
-                        {ultimoBipado.numero_serie && (
-                          <span className="text-muted ms-2 fs-12">(S/N: {ultimoBipado.numero_serie})</span>
-                        )}
-                        <span className="badge bg-white text-dark border ms-2 font-monospace fs-11">{ultimoBipado.tipo}</span>
-                      </div>
-                    </div>
-                    <span className="text-muted fs-11 font-monospace">{ultimoBipado.hora}</span>
-                  </div>
                 )}
+
+                {/* Entrada Manual de Apoio (Para Digitação ou Leitor USB) */}
+                <div className="p-3 bg-light border-top">
+                  <form onSubmit={handleBiparManual}>
+                    <div className="input-group input-group-md">
+                      <span className="input-group-text bg-white text-muted">
+                        <i className="ri-keyboard-line fs-16"></i>
+                      </span>
+                      <input
+                        ref={inputRef}
+                        type="text"
+                        className="form-control font-monospace fw-bold fs-14"
+                        placeholder={`Ou digite o patrimônio do ${tipoAtivo} (ex: 100039491) e pressione Enter...`}
+                        value={barcodeInput}
+                        onChange={(e) => setBarcodeInput(e.target.value)}
+                      />
+                      <button type="submit" className="btn btn-primary fw-semibold px-3">
+                        <i className="ri-add-line me-1"></i> Adicionar
+                      </button>
+                    </div>
+                  </form>
+                </div>
               </div>
 
-              {/* Seção 3: Resumo do Lote em Montagem & Tabela */}
+              {/* Seção 4: Tabela de Itens do Lote em Montagem */}
               <div className="card shadow-xs border mb-0" style={{ borderRadius: '10px' }}>
                 <div className="card-header bg-light border-bottom p-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
                   <div className="d-flex align-items-center gap-2">
-                    <i className="ri-stack-line text-primary fs-18"></i>
+                    <i className="ri-stack-line text-success fs-18"></i>
                     <h6 className="card-title mb-0 fs-14 fw-bold text-dark">
                       Equipamentos no Lote Atual ({loteStats.total})
                     </h6>
                     <span className="badge bg-soft-primary text-primary fs-11">
-                      {loteStats.cpus} CPUs • {loteStats.monitores} Monitores • {loteStats.notebooks} Notes
+                      {loteStats.cpus} CPUs
+                    </span>
+                    <span className="badge bg-soft-info text-info fs-11">
+                      {loteStats.monitores} Monitores
+                    </span>
+                    <span className="badge bg-soft-warning text-dark fs-11">
+                      {loteStats.notebooks} Notes
                     </span>
                   </div>
 
@@ -9981,7 +10660,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                       disabled={salvandoLote || loteItens.length === 0}
                     >
                       <i className="ri-save-3-line"></i>
-                      {salvandoLote ? 'Gravando...' : `Salvar Saída (${loteItens.length} itens)`}
+                      {salvandoLote ? 'Gravando...' : `Gravar e Finalizar Saída (${loteItens.length} itens)`}
                     </button>
                   </div>
                 </div>
@@ -9990,17 +10669,17 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   {loteItens.length === 0 ? (
                     <div className="text-center py-5 text-muted">
                       <i className="ri-inbox-line fs-36 d-block mb-2 text-secondary opacity-50"></i>
-                      <p className="fs-13 mb-1 fw-semibold text-dark">Nenhum equipamento bipado para esta remessa ainda.</p>
-                      <span className="fs-12">Preencha o destino acima, selecione o tipo (CPU ou Monitor) e bipe os códigos em sequência.</span>
+                      <p className="fs-13 mb-1 fw-semibold text-dark">Nenhum equipamento adicionado a esta remessa ainda.</p>
+                      <span className="fs-12">Preencha o destino acima, inicie a câmera ou digite os patrimônios para conferência.</span>
                     </div>
                   ) : (
                     <div className="table-responsive" style={{ maxHeight: '380px', overflowY: 'auto' }}>
                       <table className="table table-sm table-hover table-striped align-middle mb-0 fs-12">
                         <thead className="table-light text-muted fw-bold sticky-top">
                           <tr>
-                            <th style={{ width: '50px' }}>#</th>
+                            <th style={{ width: '45px' }}>#</th>
                             <th style={{ width: '90px' }}>Tipo</th>
-                            <th>Patrimônio Bipado</th>
+                            <th>Patrimônio Municipal</th>
                             <th>Nº de Série</th>
                             <th>Modelo</th>
                             <th>Horário</th>
@@ -10013,13 +10692,16 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                               <td className="text-muted font-monospace">{loteItens.length - idx}</td>
                               <td>
                                 <span className={`badge font-monospace ${
-                                  it.tipo === 'CPU' ? 'bg-soft-primary text-primary' : it.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-success text-success'
+                                  it.tipo === 'CPU' ? 'bg-soft-primary text-primary' : it.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
                                 } border`}>
                                   {it.tipo}
                                 </span>
                               </td>
                               <td>
                                 <span className="font-monospace fw-bold text-dark fs-13">{it.patrimonio}</span>
+                                {it.tipoEtiqueta && (
+                                  <span className="d-block text-muted fs-10">{it.tipoEtiqueta}</span>
+                                )}
                               </td>
                               <td className="font-monospace text-muted">{it.numero_serie || '-'}</td>
                               <td className="text-truncate" style={{ maxWidth: '200px' }}>{it.marca_modelo}</td>
@@ -10106,73 +10788,64 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 </div>
               </div>
 
-              {/* Tabela de Expedidos */}
-              <div className="table-responsive border rounded" style={{ minHeight: '350px' }}>
-                <table className="table table-sm table-hover table-striped align-middle fs-12 mb-0">
+              {/* Tabela do Histórico */}
+              <div className="table-responsive border rounded" style={{ minHeight: '300px' }}>
+                <table className="table table-sm table-hover table-striped align-middle mb-0 fs-12">
                   <thead className="table-light text-muted fw-bold">
                     <tr>
-                      <th style={{ width: '80px' }}>Tipo</th>
-                      <th>Patrimônio Novo</th>
-                      <th>Nº Série</th>
-                      <th>Destino / Localidade</th>
+                      <th style={{ width: '40px' }}>#</th>
+                      <th>Data / Hora</th>
+                      <th>Localidade de Destino</th>
                       <th>Secretaria</th>
-                      <th>Lote</th>
-                      <th>Data Expedição</th>
-                      <th>Origem</th>
+                      <th>Tipo</th>
+                      <th>Patrimônio</th>
+                      <th>Nº de Série</th>
+                      <th>Modelo</th>
+                      <th>Origem Registro</th>
                       <th className="text-center" style={{ width: '60px' }}>Ação</th>
                     </tr>
                   </thead>
                   <tbody>
                     {loadingExpedidos ? (
                       <tr>
-                        <td colSpan="9" className="text-center py-4 text-muted">
-                          <div className="spinner-border spinner-border-sm text-primary me-2"></div>
-                          Carregando equipamentos expedidos...
+                        <td colSpan="10" className="text-center py-4 text-muted">
+                          <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                          Carregando histórico de expedições...
                         </td>
                       </tr>
                     ) : expedidosList.length === 0 ? (
                       <tr>
-                        <td colSpan="9" className="text-center py-4 text-muted">
-                          Nenhum equipamento localizado com os filtros selecionados.
+                        <td colSpan="10" className="text-center py-5 text-muted">
+                          Nenhum equipamento novo expedido encontrado com os filtros selecionados.
                         </td>
                       </tr>
                     ) : (
-                      expedidosList.map((it) => (
-                        <tr key={it.id}>
+                      expedidosList.map((item, index) => (
+                        <tr key={item.id}>
+                          <td className="text-muted font-monospace">{(page - 1) * 50 + index + 1}</td>
+                          <td className="font-monospace fs-11 text-muted">{item.data_expedicao}</td>
+                          <td className="fw-bold text-dark">{item.localidade}</td>
+                          <td>{item.secretaria || '-'}</td>
                           <td>
                             <span className={`badge font-monospace ${
-                              it.tipo === 'CPU' ? 'bg-soft-primary text-primary' : it.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-success text-success'
+                              item.tipo === 'CPU' ? 'bg-soft-primary text-primary' : item.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
                             } border`}>
-                              {it.tipo}
+                              {item.tipo}
                             </span>
                           </td>
+                          <td className="font-monospace fw-bold text-dark fs-13">{item.patrimonio}</td>
+                          <td className="font-monospace text-muted">{item.numero_serie || '-'}</td>
+                          <td className="text-muted">{item.marca_modelo || '-'}</td>
                           <td>
-                            <span className="font-monospace fw-bold fs-13 text-dark">{it.patrimonio}</span>
-                          </td>
-                          <td className="font-monospace text-muted">{it.numero_serie || '-'}</td>
-                          <td>
-                            <strong className="text-dark d-block">{it.localidade}</strong>
-                            <small className="text-muted">{it.marca_modelo}</small>
-                          </td>
-                          <td>
-                            {it.secretaria ? (
-                              <span className="badge bg-light text-dark border font-monospace fs-10">{it.secretaria}</span>
-                            ) : '-'}
-                          </td>
-                          <td>
-                            <span className="badge bg-soft-dark text-dark font-monospace fs-10">{it.lote_id}</span>
-                          </td>
-                          <td className="font-monospace text-muted fs-11">{it.data_expedicao}</td>
-                          <td>
-                            <span className="badge bg-light text-muted border fs-10">
-                              {it.origem_registro === 'importacao_planilha' ? 'Planilha' : 'Bipagem'}
+                            <span className="badge bg-light text-muted border font-monospace fs-10">
+                              {item.origem_registro || 'Bipagem'}
                             </span>
                           </td>
                           <td className="text-center">
                             <button
                               type="button"
                               className="btn btn-ghost-danger btn-sm p-1"
-                              onClick={() => handleExcluirExpedido(it.id, it.patrimonio)}
+                              onClick={() => handleExcluirExpedido(item.id, item.patrimonio)}
                               title="Excluir este registro"
                             >
                               <i className="ri-delete-bin-line fs-14"></i>
@@ -10187,8 +10860,10 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
               {/* Paginação */}
               {totalPages > 1 && (
-                <div className="d-flex justify-content-between align-items-center fs-12 text-muted">
-                  <span>Página {page} de {totalPages}</span>
+                <div className="d-flex align-items-center justify-content-between p-2">
+                  <span className="fs-12 text-muted">
+                    Página {page} de {totalPages}
+                  </span>
                   <div className="btn-group btn-group-sm">
                     <button
                       type="button"
@@ -10213,93 +10888,90 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
           )}
 
           {/* ========================================================= */}
-          {/* ABA 3: BALANÇO NOVO X EMC (CONCILIAÇÃO) */}
+          {/* ABA 3: BALANÇO NOVO X RETORNO EMC */}
           {/* ========================================================= */}
           {activeSubTab === 'conciliacao' && (
             <div className="d-flex flex-column gap-3">
-              <div className="p-3 rounded bg-light border">
+              <div className="p-3 bg-light rounded border">
                 <label className="form-label fs-13 fw-bold text-dark mb-1">
-                  Selecione a Localidade para Verificar a Troca:
+                  Selecione a Localidade para Ver o Balanço (Novos Entregues vs. EMC Retornados ao Galpão):
                 </label>
-                <div className="input-group">
-                  <input
-                    type="text"
-                    className="form-control"
-                    placeholder="Digite ou selecione a localidade..."
-                    value={concilLocalidade}
-                    onChange={(e) => setConcilLocalidade(e.target.value)}
-                    list="concil-datalist"
-                  />
-                  <datalist id="concil-datalist">
-                    {(resumo?.localidadesDisponiveis || []).map((loc) => (
-                      <option key={loc} value={loc} />
-                    ))}
-                  </datalist>
-                  <button
-                    type="button"
-                    className="btn btn-primary fw-bold"
-                    onClick={() => handleConsultarConciliacao(concilLocalidade)}
-                    disabled={loadingConcil || !concilLocalidade.trim()}
-                  >
-                    {loadingConcil ? 'Verificando...' : 'Verificar Troca'}
-                  </button>
+                <div className="row g-2 align-items-center">
+                  <div className="col-md-8 col-12">
+                    <input
+                      type="text"
+                      className="form-control"
+                      placeholder="Digite ou escolha a unidade para analisar..."
+                      value={concilLocalidade}
+                      onChange={(e) => setConcilLocalidade(e.target.value)}
+                      list="concil-datalist"
+                    />
+                    <datalist id="concil-datalist">
+                      {(resumo?.localidadesDisponiveis || []).map((l) => (
+                        <option key={l} value={l} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="col-md-4 col-12">
+                    <button
+                      type="button"
+                      className="btn btn-primary w-100 fw-bold"
+                      onClick={() => handleConsultarConciliacao()}
+                      disabled={loadingConcil || !concilLocalidade.trim()}
+                    >
+                      <i className="ri-search-eye-line me-1"></i>
+                      {loadingConcil ? 'Calculando...' : 'Consultar Balanço'}
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {concilData && (
-                <div className="card shadow-xs border" style={{ borderRadius: '10px' }}>
-                  <div className="card-header bg-light border-bottom p-3">
-                    <h5 className="mb-0 fs-15 fw-bold text-dark">
-                      Balanço de Substituição: {concilData.localidade}
-                    </h5>
+                <div className="card border shadow-xs mb-0">
+                  <div className="card-header bg-soft-primary border-bottom py-2 px-3">
+                    <h6 className="card-title mb-0 fs-14 fw-bold text-primary">
+                      <i className="ri-building-line me-1"></i> {concilData.localidade}
+                    </h6>
                   </div>
                   <div className="card-body p-3">
-                    <div className="row g-3">
-                      {/* Coluna 1: Novos que Saíram */}
+                    <div className="row g-3 text-center mb-3">
                       <div className="col-md-4 col-12">
-                        <div className="p-3 rounded bg-soft-success border border-success-subtle text-center">
-                          <span className="badge bg-success text-white mb-2 fs-11">NOVOS MUNICIPAIS</span>
-                          <h4 className="fs-22 fw-bold text-success mb-2 font-monospace">
-                            {concilData.novos.total}
+                        <div className="p-3 rounded bg-soft-success border border-success-subtle">
+                          <span className="text-success fs-11 text-uppercase fw-bold d-block">Novos Entregues</span>
+                          <h4 className="mb-0 fs-22 font-monospace text-success fw-bold">
+                            {concilData.resumo?.novosExpedidosTotal || 0}
                           </h4>
-                          <div className="fs-12 text-muted">
-                            <div>💻 <strong>{concilData.novos.cpus}</strong> CPUs</div>
-                            <div>🖥️ <strong>{concilData.novos.monitores}</strong> Monitores</div>
-                            {concilData.novos.notebooks > 0 && <div>💼 <strong>{concilData.novos.notebooks}</strong> Notebooks</div>}
-                          </div>
+                          <small className="text-muted fs-11">
+                            {concilData.resumo?.novosCpus || 0} CPUs • {concilData.resumo?.novosMonitores || 0} Monitores
+                          </small>
                         </div>
                       </div>
 
-                      {/* Coluna 2: EMC Recolhidos no Galpão */}
                       <div className="col-md-4 col-12">
-                        <div className="p-3 rounded bg-soft-warning border border-warning-subtle text-center">
-                          <span className="badge bg-warning text-dark mb-2 fs-11">EMC RECOLHIDOS NO GALPÃO</span>
-                          <h4 className="fs-22 fw-bold text-dark mb-2 font-monospace">
-                            {concilData.emcRecolhidos.total}
+                        <div className="p-3 rounded bg-soft-warning border border-warning-subtle">
+                          <span className="text-warning fs-11 text-uppercase fw-bold d-block">EMC Retornados ao Galpão</span>
+                          <h4 className="mb-0 fs-22 font-monospace text-warning fw-bold">
+                            {concilData.resumo?.emcRecolhidosGalpaoTotal || 0}
                           </h4>
-                          <div className="fs-12 text-muted">
-                            <div>💻 <strong>{concilData.emcRecolhidos.cpus}</strong> CPUs</div>
-                            <div>🖥️ <strong>{concilData.emcRecolhidos.monitores}</strong> Monitores</div>
-                            {concilData.emcRecolhidos.notebooks > 0 && <div>💼 <strong>{concilData.emcRecolhidos.notebooks}</strong> Notebooks</div>}
-                          </div>
+                          <small className="text-muted fs-11">
+                            {concilData.resumo?.emcCpus || 0} CPUs • {concilData.resumo?.emcMonitores || 0} Monitores
+                          </small>
                         </div>
                       </div>
 
-                      {/* Coluna 3: Saldo Pendente de Retorno */}
                       <div className="col-md-4 col-12">
-                        <div className={`p-3 rounded border text-center ${
-                          (concilData.saldoPendenteRetorno.cpus + concilData.saldoPendenteRetorno.monitores) === 0
-                            ? 'bg-soft-primary border-primary-subtle'
-                            : 'bg-soft-danger border-danger-subtle'
+                        <div className={`p-3 rounded border ${
+                          (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'bg-soft-danger border-danger-subtle' : 'bg-soft-info border-info-subtle'
                         }`}>
-                          <span className="badge bg-dark text-white mb-2 fs-11">SALDO A RETORNAR EMC</span>
-                          <h4 className="fs-22 fw-bold mb-2 font-monospace text-danger">
-                            {concilData.saldoPendenteRetorno.cpus + concilData.saldoPendenteRetorno.monitores}
+                          <span className="fs-11 text-uppercase fw-bold d-block text-dark">Saldo Pendente a Retornar</span>
+                          <h4 className={`mb-0 fs-22 font-monospace fw-bold ${
+                            (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'text-danger' : 'text-info'
+                          }`}>
+                            {concilData.resumo?.saldoRetornoTotal || 0}
                           </h4>
-                          <div className="fs-12 text-muted">
-                            <div>Faltam <strong>{concilData.saldoPendenteRetorno.cpus}</strong> CPUs EMC</div>
-                            <div>Faltam <strong>{concilData.saldoPendenteRetorno.monitores}</strong> Monitores EMC</div>
-                          </div>
+                          <small className="text-muted fs-11">
+                            Saldo: {concilData.resumo?.saldoCpus || 0} CPUs • {concilData.resumo?.saldoMonitores || 0} Monitores
+                          </small>
                         </div>
                       </div>
                     </div>
@@ -10310,48 +10982,50 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
           )}
 
           {/* ========================================================= */}
-          {/* ABA 4: IMPORTAÇÃO DO APP ANTERIOR */}
+          {/* ABA 4: IMPORTAR DADOS DO APP ANTERIOR */}
           {/* ========================================================= */}
           {activeSubTab === 'importar' && (
             <div className="d-flex flex-column gap-3">
-              <div className="alert alert-info py-3 px-3 mb-0 fs-13 border-info-subtle">
-                <i className="ri-information-fill me-2 fs-16 text-info"></i>
-                <strong>Importação Rápida de Histórico:</strong> Cole abaixo os dados da planilha do outro app em formato <strong>CSV</strong> (separado por vírgula ou ponto-e-vírgula) ou <strong>JSON</strong> com as colunas <code>patrimonio, localidade, tipo, numero_serie, data</code>.
+              <div className="alert alert-info border-info-subtle fs-12 mb-0">
+                <i className="ri-information-line fs-16 align-middle me-1"></i>
+                <strong>Importação Rápida de Histórico:</strong> Cole aqui os dados do seu aplicativo anterior (planilha Excel / CSV copiado e colado ou array JSON). O sistema identifica automaticamente colunas de Patrimônio, Localidade, Tipo e Série.
               </div>
 
-              <div>
-                <label className="form-label fs-12 fw-bold text-dark mb-1">
-                  Cole os dados da planilha aqui:
+              <div className="mb-2">
+                <label className="form-label fs-12 fw-bold text-dark">
+                  Cole os dados abaixo (CSV com cabeçalho ou JSON):
                 </label>
                 <textarea
-                  className="form-control font-monospace fs-12"
-                  rows={8}
-                  placeholder={`Exemplo CSV:\nPatrimonio;Localidade;Tipo;Serial;Data\n100039491;CRAS Industrial;CPU;PE0FPFRT;2026-10-15\n100039492;CRAS Industrial;CPU;PE0FPFRU;2026-10-15\n100045100;CRAS Industrial;MONITOR;4N0RHH3;2026-10-15`}
+                  className="form-control font-monospace fs-11"
+                  rows="8"
+                  placeholder={"patrimonio;localidade;tipo;numero_serie;marca_modelo\n100039491;CRAS Industrial;CPU;PE0FPFRT;Lenovo M75q\n100039492;CRAS Industrial;MONITOR;GB6WTN3;Dell P2422H"}
                   value={importJsonText}
                   onChange={(e) => setImportJsonText(e.target.value)}
-                />
+                ></textarea>
               </div>
 
-              <div className="d-flex justify-content-between align-items-center">
+              <div className="d-flex align-items-center justify-content-between">
                 <span className="text-muted fs-11">
-                  O sistema ignorará automaticamente qualquer patrimônio que já exista na base.
+                  Formatos aceitos: delimitados por ponto-e-vírgula (;), vírgula (,), tabulação (tab) ou JSON.
                 </span>
-
                 <button
                   type="button"
-                  className="btn btn-success fw-bold px-4"
+                  className="btn btn-success px-4 fw-bold"
                   onClick={handleExecutarImportacao}
                   disabled={importando || !importJsonText.trim()}
                 >
                   <i className="ri-upload-2-line me-1"></i>
-                  {importando ? 'Processando...' : 'Iniciar Importação'}
+                  {importando ? 'Processando Importação...' : 'Importar Dados Agora'}
                 </button>
               </div>
 
               {importResultado && (
-                <div className="alert alert-success mt-2 py-2 px-3 border-success-subtle fs-13">
-                  <i className="ri-checkbox-circle-fill me-1 text-success"></i>
-                  <strong>Resultado:</strong> {importResultado.inseridos} registros inseridos com sucesso, {importResultado.ignorados} ignorados (duplicados ou vazios).
+                <div className="alert alert-success border-success-subtle mt-2 fs-12">
+                  <i className="ri-checkbox-circle-line fs-16 align-middle me-1"></i>
+                  <strong>Resultado da Importação:</strong> {importResultado.message}
+                  <span className="d-block mt-1 text-muted">
+                    Total Inseridos: {importResultado.inseridos} • Ignorados/Duplicados: {importResultado.ignorados}
+                  </span>
                 </div>
               )}
             </div>
@@ -10359,76 +11033,106 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
         </div>
       </div>
 
-      {/* MODAL / IMPRESSÃO DE TERMO DE ENTREGA */}
+      {/* MODAL / TERMO DE ENTREGA FORMAL (PARA IMPRESSÃO E ASSINATURA) */}
       {termoModalLote && (
-        <div className="modal fade show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="modal-dialog modal-lg modal-dialog-scrollable">
-            <div className="modal-content">
-              <div className="modal-header bg-light">
-                <h5 className="modal-title fs-15 fw-bold text-dark">
-                  <i className="ri-file-text-line text-primary me-2"></i>
-                  Termo de Entrega / Romaneio de Saída
+        <div className="modal fade show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.65)', zIndex: 1055 }} tabIndex="-1">
+          <div className="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+            <div className="modal-content shadow-lg border-0">
+              <div className="modal-header bg-dark text-white py-2 px-3">
+                <h5 className="modal-title fs-15 fw-bold d-flex align-items-center gap-2">
+                  <i className="ri-file-paper-2-line text-warning"></i> Termo de Entrega de Equipamentos Novos
                 </h5>
-                <button type="button" className="btn-close" onClick={() => setTermoModalLote(null)}></button>
-              </div>
-              <div className="modal-body p-4" id="termo-impressao">
-                <div className="text-center mb-4 pb-2 border-bottom">
-                  <h4 className="fs-16 fw-bold text-dark mb-1">PREFEITURA MUNICIPAL DE CONTAGEM - MG</h4>
-                  <p className="fs-12 text-muted mb-1">Superintendência de Tecnologia da Informação • Gestão de Ativos</p>
-                  <h5 className="fs-14 fw-bold text-primary mt-2">TERMO DE ENTREGA DE EQUIPAMENTOS NOVOS (BNDES / PMAT)</h5>
-                </div>
-
-                <div className="row g-2 mb-3 fs-12">
-                  <div className="col-6"><strong>Destino / Unidade:</strong> {termoModalLote.localidade}</div>
-                  <div className="col-6"><strong>Secretaria:</strong> {termoModalLote.secretaria || 'Não informada'}</div>
-                  <div className="col-6"><strong>Lote Nº:</strong> {termoModalLote.lote_id}</div>
-                  <div className="col-6"><strong>Data da Saída:</strong> {termoModalLote.data}</div>
-                </div>
-
-                <table className="table table-sm table-bordered fs-11 align-middle mb-4">
-                  <thead className="table-light">
-                    <tr>
-                      <th style={{ width: '40px' }}>#</th>
-                      <th style={{ width: '80px' }}>Tipo</th>
-                      <th>Patrimônio</th>
-                      <th>Nº Série</th>
-                      <th>Modelo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {termoModalLote.itens.map((it, idx) => (
-                      <tr key={idx}>
-                        <td className="text-center">{idx + 1}</td>
-                        <td>{it.tipo}</td>
-                        <td className="font-monospace fw-bold">{it.patrimonio}</td>
-                        <td className="font-monospace">{it.numero_serie || '-'}</td>
-                        <td>{it.marca_modelo}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div className="row g-4 pt-4 mt-2 border-top fs-11">
-                  <div className="col-6 text-center">
-                    <div style={{ borderBottom: '1px solid #000', marginBottom: '6px', height: '30px' }}></div>
-                    <strong>Responsável pela Expedição (Galpão)</strong>
-                  </div>
-                  <div className="col-6 text-center">
-                    <div style={{ borderBottom: '1px solid #000', marginBottom: '6px', height: '30px' }}></div>
-                    <strong>Recebido na Localidade (Nome / Matrícula / Data)</strong>
-                  </div>
-                </div>
-              </div>
-              <div className="modal-footer">
                 <button
                   type="button"
-                  className="btn btn-primary btn-sm d-flex align-items-center gap-1"
+                  className="btn-close btn-close-white"
+                  onClick={() => setTermoModalLote(null)}
+                  aria-label="Fechar"
+                ></button>
+              </div>
+
+              <div className="modal-body p-4 bg-white text-dark" id="termo-entrega-print-area">
+                <div className="text-center border-bottom pb-3 mb-3">
+                  <h4 className="fw-bold mb-1 fs-18 text-uppercase">Prefeitura Municipal de Contagem</h4>
+                  <h6 className="text-muted fs-13 mb-1">Superintendência de Tecnologia da Informação • STI</h6>
+                  <span className="badge bg-dark text-white font-monospace px-3 py-1 fs-12">
+                    TERMO DE ENTREGA E INSTALAÇÃO • PMAT / BNDES
+                  </span>
+                </div>
+
+                <div className="row g-2 mb-3 fs-12 p-3 bg-light rounded border">
+                  <div className="col-sm-6">
+                    <strong>Localidade / Destino:</strong> {termoModalLote.localidade}
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>Secretaria / Órgão:</strong> {termoModalLote.secretaria || 'Administração Municipal'}
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>Data da Expedição:</strong> {termoModalLote.data_expedicao}
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>Responsável Galpão:</strong> {termoModalLote.usuario}
+                  </div>
+                </div>
+
+                <div className="table-responsive mb-4">
+                  <table className="table table-sm table-bordered align-middle mb-0 fs-11">
+                    <thead className="table-dark text-white text-uppercase">
+                      <tr>
+                        <th style={{ width: '35px' }}>#</th>
+                        <th style={{ width: '80px' }}>Tipo</th>
+                        <th>Patrimônio Municipal</th>
+                        <th>Nº de Série</th>
+                        <th>Modelo / Descrição</th>
+                        <th>Origem Recurso</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {termoModalLote.itens.map((it, idx) => (
+                        <tr key={idx}>
+                          <td className="text-center font-monospace">{idx + 1}</td>
+                          <td className="fw-bold">{it.tipo}</td>
+                          <td className="font-monospace fw-bold text-dark fs-12">{it.patrimonio}</td>
+                          <td className="font-monospace text-muted">{it.numero_serie || '-'}</td>
+                          <td>{it.marca_modelo}</td>
+                          <td>{it.origem_recurso || 'PMAT / BNDES'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="border-top pt-4 mt-5">
+                  <div className="row text-center fs-12">
+                    <div className="col-6">
+                      <div className="border-top border-dark mx-4 pt-1">
+                        <strong>Entregue por (Galpão / STI)</strong>
+                        <div className="text-muted fs-11">Assinatura / Matrícula</div>
+                      </div>
+                    </div>
+                    <div className="col-6">
+                      <div className="border-top border-dark mx-4 pt-1">
+                        <strong>Recebido por (Unidade de Destino)</strong>
+                        <div className="text-muted fs-11">Nome Legível / Assinatura / Cargo</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="modal-footer bg-light py-2 px-3 d-flex justify-content-between">
+                <button
+                  type="button"
+                  className="btn btn-outline-secondary btn-sm"
+                  onClick={() => setTermoModalLote(null)}
+                >
+                  Fechar
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm px-4 fw-bold"
                   onClick={() => window.print()}
                 >
-                  <i className="ri-printer-line"></i> Imprimir Termo
-                </button>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTermoModalLote(null)}>
-                  Fechar
+                  <i className="ri-printer-line me-1"></i> Imprimir Termo
                 </button>
               </div>
             </div>
@@ -10439,9 +11143,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   );
 }
 
-// ==========================================
-// VIEW: ROMANEIOS & HISTÓRICO DE DEVOLUÇÕES
-// ==========================================
 function RomaneiosView({ stats, notify }) {
   const [lotes, setLotes] = useState([]);
   const [selectedLote, setSelectedLote] = useState(null);
