@@ -2046,7 +2046,8 @@ app.get('/api/galpao/itens', (req, res) => {
       countTotal,
       page: pageNum,
       totalPages: Math.ceil(total / limitNum) || 1,
-      items
+      items,
+      data: items
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

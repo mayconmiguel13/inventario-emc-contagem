@@ -9697,7 +9697,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       const res = await fetch(`/api/novos/expedidos?${params.toString()}`);
       const data = await res.json();
       if (data.success) {
-        setExpedidosList(data.data || []);
+        setExpedidosList(data.items || data.data || []);
         setPage(data.page || 1);
         setTotalPages(data.totalPages || 1);
       }
