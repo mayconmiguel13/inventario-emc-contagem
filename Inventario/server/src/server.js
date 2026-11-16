@@ -366,9 +366,9 @@ db.exec(`
     patrimonio TEXT NOT NULL,
     numero_serie TEXT,
     marca_modelo TEXT,
-    origem_recurso TEXT DEFAULT 'PMAT / BNDES',
+    origem_recurso TEXT DEFAULT 'Municipal',
     data_expedicao TEXT DEFAULT (datetime('now', 'localtime')),
-    usuario TEXT DEFAULT 'Maycon',
+    usuario TEXT DEFAULT 'Responsável TI',
     origem_registro TEXT DEFAULT 'bipagem_galpao',
     observacoes TEXT,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -3240,7 +3240,7 @@ app.get('/api/romaneios/:id/itens', (req, res) => {
 // 1. Gravar lote de equipamentos expedidos no galpão
 app.post('/api/novos/expedir', async (req, res) => {
   try {
-    const { lote_id, localidade, secretaria = '', itens = [], usuario = 'Maycon', observacoes = '' } = req.body;
+    const { lote_id, localidade, secretaria = '', itens = [], usuario = 'Responsável TI', observacoes = '' } = req.body;
     if (!localidade || !localidade.trim()) {
       return res.status(400).json({ success: false, message: 'Localidade de destino é obrigatória.' });
     }
@@ -3279,9 +3279,9 @@ app.post('/api/novos/expedir', async (req, res) => {
           pat,
           (item.numero_serie || '').trim(),
           (item.marca_modelo || 'Lenovo ThinkCentre M75q').trim(),
-          (item.origem_recurso || 'PMAT / BNDES').trim(),
+          (item.origem_recurso || 'Municipal').trim(),
           nowStr,
-          usuario || 'Maycon',
+          usuario || 'Responsável TI',
           observacoes || ''
         );
         insertedIds.push(info.lastInsertRowid);
@@ -3482,6 +3482,58 @@ app.get('/api/novos/resumo', (req, res) => {
     });
   } catch (err) {
     console.error('Erro em /api/novos/resumo:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 4b. Listar todos os lotes / termos gerados para seleção e download
+app.get('/api/novos/lotes', (req, res) => {
+  try {
+    const lotes = db.prepare(`
+      SELECT 
+        lote_id, 
+        localidade, 
+        secretaria,
+        COUNT(1) as totalItens,
+        SUM(CASE WHEN UPPER(tipo) = 'CPU' THEN 1 ELSE 0 END) as cpus,
+        SUM(CASE WHEN UPPER(tipo) LIKE '%MONITOR%' THEN 1 ELSE 0 END) as monitores,
+        SUM(CASE WHEN UPPER(tipo) = 'NOTEBOOK' THEN 1 ELSE 0 END) as notebooks,
+        max(data_expedicao) as data_expedicao,
+        max(usuario) as usuario
+      FROM expedicao_novos 
+      GROUP BY lote_id 
+      ORDER BY min(id) DESC
+    `).all();
+
+    res.json({ success: true, lotes });
+  } catch (err) {
+    console.error('Erro em /api/novos/lotes:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 4c. Obter dados completos de um lote específico para o termo de entrega
+app.get('/api/novos/lote/:lote_id', (req, res) => {
+  try {
+    const { lote_id } = req.params;
+    const itens = db.prepare('SELECT * FROM expedicao_novos WHERE lote_id = ? ORDER BY id ASC').all(lote_id);
+    if (!itens || itens.length === 0) {
+      return res.status(404).json({ success: false, message: 'Lote não encontrado.' });
+    }
+    const info = itens[0];
+    res.json({
+      success: true,
+      lote: {
+        lote_id: info.lote_id,
+        localidade: info.localidade,
+        secretaria: info.secretaria || '',
+        data_expedicao: info.data_expedicao,
+        usuario: info.usuario || 'Responsável TI',
+        itens
+      }
+    });
+  } catch (err) {
+    console.error('Erro em /api/novos/lote/:lote_id:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });

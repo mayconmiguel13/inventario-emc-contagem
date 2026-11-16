@@ -9476,14 +9476,14 @@ function parseMunicipalBarcode(rawCode) {
     };
   }
 
-  // 4. Patrimônio Municipal de Contagem (ex: 100039491 da foto BNDES / PMAT do usuário)
+  // 4. Patrimônio Municipal de Contagem (ex: 100039491 da foto do usuário)
   // Normalmente 7 a 10 dígitos numéricos
   if (/^\d{7,10}$/.test(clean)) {
     return {
       valid: true,
       code: clean,
       type: 'patrimonio_municipal',
-      label: 'Patrimônio Municipal (PMAT / BNDES)',
+      label: 'Patrimônio Municipal',
       isMunicipal: true
     };
   }
@@ -9536,7 +9536,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [secretaria, setSecretaria] = useState('');
   const [tipoAtivo, setTipoAtivo] = useState('CPU'); // 'CPU' | 'MONITOR' | 'NOTEBOOK'
   const [marcaModelo, setMarcaModelo] = useState('Lenovo ThinkCentre M75q');
-  const [origemRecurso, setOrigemRecurso] = useState('PMAT / BNDES');
+  const [origemRecurso, setOrigemRecurso] = useState('Municipal');
   const [barcodeInput, setBarcodeInput] = useState('');
   const [loteItens, setLoteItens] = useState([]); // itens no lote atual em montagem
   const [salvandoLote, setSalvandoLote] = useState(false);
@@ -9547,7 +9547,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const tipoAtivoRef = useRef('CPU');
   const marcaModeloRef = useRef('Lenovo ThinkCentre M75q');
   const localidadeRef = useRef('');
-  const origemRecursoRef = useRef('PMAT / BNDES');
+  const origemRecursoRef = useRef('Municipal');
   const loteItensRef = useRef([]);
   loteItensRef.current = loteItens;
 
@@ -9568,7 +9568,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const html5QrCodeRef = useRef(null);
   const lastScannedCodeRef = useRef('');
   const lastScannedTimeRef = useRef(0);
-  const candidateRef = useRef({ code: '', count: 0, time: 0 }); // Consenso duplo (anti-falso positivo)
+  const candidateRef = useRef({ code: '', count: 0, time: 0 });
   const isProcessingRef = useRef(false);
   const inputRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -9583,6 +9583,12 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
+  // GESTÃO E SELEÇÃO DE TERMOS GERADOS PARA DOWNLOAD
+  const [lotesList, setLotesList] = useState([]);
+  const [selectedLoteId, setSelectedLoteId] = useState('');
+  const [loadingLoteTermo, setLoadingLoteTermo] = useState(false);
+  const [historicoViewMode, setHistoricoViewMode] = useState('termos'); // 'termos' | 'itens'
+
   // Conciliação Localidade
   const [concilLocalidade, setConcilLocalidade] = useState('');
   const [concilData, setConcilData] = useState(null);
@@ -9596,7 +9602,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [importando, setImportando] = useState(false);
   const [importResultado, setImportResultado] = useState(null);
 
-  // Função para alternar o tipo ativo de forma atômica (state + ref)
+  // Alternar o tipo ativo de forma atômica (state + ref)
   const handleSelectTipo = (novoTipo) => {
     setTipoAtivo(novoTipo);
     tipoAtivoRef.current = novoTipo;
@@ -9615,13 +9621,11 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     }
   };
 
-  // Atualizar localidade sincronizando ref
   const handleLocalidadeChange = (val) => {
     setLocalidade(val);
     localidadeRef.current = val;
   };
 
-  // Som de bip sonoro com Web Audio API
   const playBeep = (type = 'success') => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -9636,15 +9640,14 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       gain.connect(ctx.destination);
 
       if (type === 'success') {
-        osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
         gain.gain.setValueAtTime(0.2, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
         osc.start(ctx.currentTime);
         osc.stop(ctx.currentTime + 0.12);
       } else {
-        // Alerta de duplicidade / erro
         osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(220, ctx.currentTime); // A3 grave
+        osc.frequency.setValueAtTime(220, ctx.currentTime);
         gain.gain.setValueAtTime(0.25, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
         osc.start(ctx.currentTime);
@@ -9653,7 +9656,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     } catch (e) {}
   };
 
-  // Carregar dados de resumo e lista inicial
   const fetchResumo = async () => {
     try {
       const res = await fetch('/api/novos/resumo');
@@ -9661,44 +9663,425 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       if (data.success) {
         setResumo(data);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('Erro ao carregar resumo de novos:', e);
+    }
+  };
+
+  const fetchLotes = async () => {
+    try {
+      const res = await fetch('/api/novos/lotes');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.lotes)) {
+        setLotesList(data.lotes);
+        if (data.lotes.length > 0 && !selectedLoteId) {
+          setSelectedLoteId(data.lotes[0].lote_id);
+        }
+      }
+    } catch (e) {
+      console.warn('Erro ao buscar lista de lotes/termos:', e);
+    }
   };
 
   const fetchExpedidos = async (pg = 1) => {
     setLoadingExpedidos(true);
     try {
-      const params = new URLSearchParams();
-      params.set('page', pg);
-      params.set('limit', '50');
-      if (historicoSearch) params.set('search', historicoSearch);
-      if (historicoTipo) params.set('tipo', historicoTipo);
-      if (historicoLocalidade) params.set('localidade', historicoLocalidade);
+      const params = new URLSearchParams({
+        page: String(pg),
+        limit: '50'
+      });
+      if (historicoSearch.trim()) params.append('search', historicoSearch.trim());
+      if (historicoTipo) params.append('tipo', historicoTipo);
+      if (historicoLocalidade.trim()) params.append('localidade', historicoLocalidade.trim());
 
       const res = await fetch(`/api/novos/expedidos?${params.toString()}`);
       const data = await res.json();
       if (data.success) {
-        setExpedidosList(data.items || []);
-        setTotalPages(data.totalPages || 1);
+        setExpedidosList(data.data || []);
         setPage(data.page || 1);
+        setTotalPages(data.totalPages || 1);
       }
     } catch (e) {
-      if (notify) notify('danger', 'Erro ao carregar lista de expedidos.');
+      console.warn('Erro ao carregar histórico:', e);
     } finally {
       setLoadingExpedidos(false);
     }
   };
 
+  // Abrir modal do Termo carregando dados completos do lote
+  const handleAbrirTermoLote = async (loteId) => {
+    if (!loteId) return;
+    setLoadingLoteTermo(true);
+    try {
+      const res = await fetch(`/api/novos/lote/${encodeURIComponent(loteId)}`);
+      const data = await res.json();
+      if (data.success && data.lote) {
+        setTermoModalLote({
+          lote_id: data.lote.lote_id,
+          localidade: data.lote.localidade,
+          secretaria: data.lote.secretaria || '',
+          data_expedicao: data.lote.data_expedicao,
+          usuario: data.lote.usuario || 'Responsável TI',
+          itens: data.lote.itens || []
+        });
+        setSelectedLoteId(loteId);
+      } else {
+        if (notify) notify('danger', 'Não foi possível carregar o termo selecionado.');
+      }
+    } catch (e) {
+      if (notify) notify('danger', 'Erro ao buscar dados do termo.');
+    } finally {
+      setLoadingLoteTermo(false);
+    }
+  };
+
+  // Baixar documento HTML do Termo pronto para visualização e impressão
+  const handleBaixarTermoHtml = (loteData) => {
+    const dados = loteData || termoModalLote;
+    if (!dados) return;
+
+    const dataFormatada = dados.data_expedicao || new Date().toLocaleString('pt-BR');
+    const safeLoc = String(dados.localidade || 'Localidade').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    const itensHtml = (dados.itens || []).map((it, idx) => `
+      <tr>
+        <td style="text-align:center;font-family:monospace;padding:6px 8px;border:1px solid #ccc;">${idx + 1}</td>
+        <td style="font-weight:bold;padding:6px 8px;border:1px solid #ccc;">${it.tipo || '-'}</td>
+        <td style="font-family:monospace;font-weight:bold;padding:6px 8px;border:1px solid #ccc;">${it.patrimonio || '-'}</td>
+        <td style="font-family:monospace;color:#555;padding:6px 8px;border:1px solid #ccc;">${it.numero_serie || '-'}</td>
+        <td style="padding:6px 8px;border:1px solid #ccc;">${it.marca_modelo || '-'}</td>
+      </tr>
+    `).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Termo de Entrega - ${dados.localidade}</title>
+  <style>
+    @page { size: A4; margin: 15mm; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #111; background: #fff; margin: 0; padding: 24px; }
+    .header { text-align: center; border-bottom: 2px solid #222; padding-bottom: 12px; margin-bottom: 18px; }
+    .header h2 { margin: 0 0 4px 0; font-size: 19px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .header h4 { margin: 0 0 8px 0; font-size: 13px; color: #444; font-weight: normal; }
+    .badge-termo { display: inline-block; background: #212529; color: #fff; padding: 5px 14px; font-size: 12px; font-weight: bold; border-radius: 4px; letter-spacing: 0.5px; }
+    .meta-box { display: flex; flex-wrap: wrap; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 13px; }
+    .meta-col { width: 50%; box-sizing: border-box; padding: 4px 8px; }
+    .meta-col strong { color: #333; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 12px; }
+    th { background: #343a40; color: #fff; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; padding: 8px; border: 1px solid #343a40; text-align: left; }
+    tr:nth-child(even) { background-color: #fcfcfc; }
+    .declaracao { font-size: 12px; color: #333; line-height: 1.5; margin: 24px 0 40px 0; padding: 10px 14px; background: #fdfdfd; border-left: 3px solid #343a40; }
+    .signatures { display: flex; justify-content: space-between; margin-top: 50px; }
+    .sig-box { width: 45%; text-align: center; border-top: 1px solid #222; padding-top: 8px; font-size: 12px; }
+    .sig-sub { font-size: 11px; color: #666; margin-top: 3px; }
+    .footer-stamp { text-align: center; margin-top: 50px; font-size: 10px; color: #888; font-family: monospace; }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="text-align:right;margin-bottom:15px;">
+    <button onclick="window.print()" style="padding:8px 16px;background:#0d6efd;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;">🖨️ Imprimir / Salvar como PDF</button>
+  </div>
+
+  <div class="header">
+    <h2>Prefeitura Municipal de Contagem</h2>
+    <h4>Superintendência de Tecnologia da Informação • STI</h4>
+    <div class="badge-termo">TERMO DE ENTREGA E RECEBIMENTO DE EQUIPAMENTOS</div>
+  </div>
+
+  <div class="meta-box">
+    <div class="meta-col"><strong>Localidade / Destino:</strong> ${dados.localidade || '-'}</div>
+    <div class="meta-col"><strong>Secretaria / Órgão:</strong> ${dados.secretaria || 'Administração Municipal'}</div>
+    <div class="meta-col"><strong>Data da Entrega:</strong> ${dataFormatada}</div>
+    <div class="meta-col"><strong>Responsável TI:</strong> ${dados.usuario || 'Responsável TI'}</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:35px;text-align:center;">#</th>
+        <th style="width:80px;">Tipo</th>
+        <th>Patrimônio Municipal</th>
+        <th>Nº de Série</th>
+        <th>Modelo / Descrição</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itensHtml}
+    </tbody>
+  </table>
+
+  <div class="declaracao">
+    Declaro para os devidos fins que recebi os equipamentos de informática acima especificados em perfeito estado de conservação e funcionamento para atendimento às necessidades desta unidade.
+  </div>
+
+  <div class="signatures">
+    <div class="sig-box">
+      <strong>Responsável TI</strong>
+      <div class="sig-sub">Superintendência de TI • Assinatura / Matrícula</div>
+    </div>
+    <div class="sig-box">
+      <strong>Responsável da Localidade</strong>
+      <div class="sig-sub">Nome Legível / Assinatura / Matrícula / Cargo</div>
+    </div>
+  </div>
+
+  <div class="footer-stamp">
+    Documento emitido pelo Sistema de Gestão de Inventário e Expedição • Prefeitura Municipal de Contagem
+  </div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Termo_Entrega_${safeLoc}_${Date.now()}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Baixar planilha CSV dos itens deste termo
+  const handleBaixarTermoCsv = (loteData) => {
+    const dados = loteData || termoModalLote;
+    if (!dados || !dados.itens || dados.itens.length === 0) return;
+    const headers = ['#', 'Localidade', 'Secretaria', 'Data Entrega', 'Responsavel TI', 'Tipo', 'Patrimonio', 'Numero Serie', 'Modelo'];
+    const rows = dados.itens.map((it, idx) => [
+      idx + 1,
+      dados.localidade,
+      dados.secretaria || '',
+      dados.data_expedicao,
+      dados.usuario || 'Responsável TI',
+      it.tipo,
+      it.patrimonio,
+      it.numero_serie || '',
+      it.marca_modelo
+    ]);
+    const safeLoc = String(dados.localidade || 'Localidade').replace(/[^a-zA-Z0-9_-]/g, '_');
+    exportToCsv(`Termo_Entrega_${safeLoc}_${Date.now()}`, headers, rows);
+  };
+
+  // Inicialização
   useEffect(() => {
     fetchResumo();
+    fetchLotes();
     fetchExpedidos(1);
+
+    // Listar câmeras disponíveis
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+      navigator.mediaDevices.enumerateDevices().then((devices) => {
+        const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+        setAvailableCameras(videoInputs);
+        const backCam = videoInputs.find((d) => /back|rear|traseira|ambiente/i.test(d.label));
+        if (backCam) {
+          setSelectedCameraId(backCam.deviceId);
+        } else if (videoInputs.length > 0) {
+          setSelectedCameraId(videoInputs[0].deviceId);
+        }
+      }).catch(() => {});
+    }
+
+    return () => {
+      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+        try { html5QrCodeRef.current.stop(); } catch (e) {}
+      }
+    };
   }, []);
 
-  // Foco permanente no input de bipagem quando em modo manual
   useEffect(() => {
-    if (activeSubTab === 'bipagem' && !isScanning) {
-      setTimeout(() => inputRef.current?.focus(), 100);
+    if (activeSubTab !== 'bipagem') {
+      stopCamera();
     }
-  }, [activeSubTab, tipoAtivo, isScanning]);
+    if (activeSubTab === 'historico') {
+      fetchLotes();
+      fetchExpedidos(1);
+    }
+  }, [activeSubTab]);
+
+  const handleBiparManual = (e) => {
+    if (e) e.preventDefault();
+    const raw = (barcodeInput || '').trim();
+    if (!raw) return;
+
+    const parsed = parseMunicipalBarcode(raw);
+    handleRegisterCodeNovos(parsed);
+    setBarcodeInput('');
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const loteStats = useMemo(() => {
+    let cpus = 0;
+    let monitores = 0;
+    let notebooks = 0;
+    loteItens.forEach((it) => {
+      if (it.tipo === 'CPU') cpus++;
+      else if (it.tipo === 'MONITOR') monitores++;
+      else if (it.tipo === 'NOTEBOOK') notebooks++;
+    });
+    return { cpus, monitores, notebooks, total: loteItens.length };
+  }, [loteItens]);
+
+  const handleRemoveItem = (id) => {
+    setLoteItens((prev) => prev.filter((it) => it.id !== id));
+  };
+
+  const handleGravarLote = async () => {
+    const locDest = (localidadeRef.current || localidade || '').trim();
+    if (!locDest) {
+      if (notify) notify('warning', 'Informe o nome da localidade de destino!');
+      return;
+    }
+    if (loteItens.length === 0) {
+      if (notify) notify('warning', 'Nenhum equipamento bipado para salvar.');
+      return;
+    }
+
+    setSalvandoLote(true);
+    try {
+      const loteId = `LOTE_NOVOS_${Date.now()}`;
+      const payload = {
+        lote_id: loteId,
+        localidade: locDest,
+        secretaria: (secretaria || '').trim() || null,
+        usuario: 'Responsável TI',
+        itens: loteItens.map((it) => ({
+          patrimonio: it.patrimonio,
+          numero_serie: it.numero_serie || null,
+          tipo: it.tipo,
+          marca_modelo: it.marca_modelo,
+          origem_recurso: it.origem_recurso || 'Municipal'
+        }))
+      };
+
+      const res = await fetch('/api/novos/expedir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        if (notify) notify('success', data.message || 'Saída expedida com sucesso!');
+        setTermoModalLote({
+          lote_id: loteId,
+          localidade: locDest,
+          secretaria: (secretaria || '').trim() || '',
+          data_expedicao: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR'),
+          usuario: 'Responsável TI',
+          itens: [...loteItens]
+        });
+        setLoteItens([]);
+        setUltimoBipado(null);
+        fetchResumo();
+        fetchExpedidos(1);
+        fetchLotes();
+      } else {
+        if (notify) notify('danger', data.message || 'Erro ao gravar lote.');
+      }
+    } catch (e) {
+      if (notify) notify('danger', 'Falha ao gravar lote.');
+    } finally {
+      setSalvandoLote(false);
+    }
+  };
+
+  const handleExcluirExpedido = async (id, pat) => {
+    if (!window.confirm(`Tem certeza que deseja excluir o patrimônio ${pat}?`)) return;
+    try {
+      const res = await fetch(`/api/novos/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        if (notify) notify('success', 'Registro excluído.');
+        fetchExpedidos(page);
+        fetchResumo();
+        fetchLotes();
+      } else {
+        if (notify) notify('danger', data.message || 'Erro ao excluir.');
+      }
+    } catch (e) {
+      if (notify) notify('danger', 'Erro ao conectar ao servidor.');
+    }
+  };
+
+  const handleConsultarConciliacao = async (loc) => {
+    const targetLoc = loc || concilLocalidade;
+    if (!targetLoc) return;
+    setLoadingConcil(true);
+    try {
+      const res = await fetch(`/api/novos/conciliacao-localidade?localidade=${encodeURIComponent(targetLoc)}`);
+      const data = await res.json();
+      if (data.success) {
+        setConcilData(data);
+      } else {
+        if (notify) notify('danger', data.message || 'Erro ao consultar conciliação.');
+      }
+    } catch (e) {
+      if (notify) notify('danger', 'Falha ao buscar dados de conciliação.');
+    } finally {
+      setLoadingConcil(false);
+    }
+  };
+
+  const handleExportarHistorico = () => {
+    if (!expedidosList || expedidosList.length === 0) return;
+    const headers = ['#', 'Data Expedição', 'Localidade', 'Secretaria', 'Tipo', 'Patrimônio', 'Nº de Série', 'Modelo', 'Usuário'];
+    const rows = expedidosList.map((it, idx) => [
+      idx + 1,
+      it.data_expedicao,
+      it.localidade,
+      it.secretaria || '',
+      it.tipo,
+      it.patrimonio,
+      it.numero_serie || '',
+      it.marca_modelo,
+      it.usuario || 'Responsável TI'
+    ]);
+    exportToCsv('historico_expedicao_equipamentos_novos', headers, rows);
+  };
+
+  const handleExecutarImportacao = async () => {
+    if (!importJsonText.trim()) {
+      if (notify) notify('warning', 'Cole a lista JSON de equipamentos.');
+      return;
+    }
+
+    setImportando(true);
+    setImportResultado(null);
+    try {
+      let parsed = JSON.parse(importJsonText);
+      if (!Array.isArray(parsed)) {
+        if (Array.isArray(parsed.itens)) parsed = parsed.itens;
+        else if (Array.isArray(parsed.dados)) parsed = parsed.dados;
+        else throw new Error('O formato precisa ser um array de itens JSON.');
+      }
+
+      const res = await fetch('/api/novos/importar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itens: parsed, usuario: 'Importação' })
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (notify) notify('success', data.message);
+        setImportResultado(data);
+        setImportJsonText('');
+        fetchResumo();
+        fetchLotes();
+      } else {
+        if (notify) notify('danger', data.message);
+      }
+    } catch (e) {
+      if (notify) notify('danger', 'Erro no formato JSON: ' + e.message);
+    } finally {
+      setImportando(false);
+    }
+  };
 
   // Registro de código no lote atual com validação de duplicidade e tipo atômico
   const handleRegisterCodeNovos = (parseResult, forceAllow = false) => {
@@ -9709,7 +10092,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     const curLoc = (localidadeRef.current || localidade || '').trim();
     if (!curLoc) {
       playBeep('error');
-      if (notify) notify('warning', 'Informe a Localidade de Destino antes de começar a bipar!');
+      if (notify) notify('warning', 'Informe o Nome da Localidade de Destino antes de começar a bipar!');
       return;
     }
 
@@ -9749,15 +10132,15 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     
     // LER SEMPRE DO REF ATÔMICO (NUNCA DO CLOSURE CONGELADO)
     const currentTipo = tipoAtivoRef.current || tipoAtivo || 'CPU';
-    const currentModelo = parseResult.modelo || marcaModeloRef.current || marcaModelo || (currentTipo === 'CPU' ? 'Lenovo ThinkCentre M75q' : currentTipo === 'MONITOR' ? 'Monitor Dell / Lenovo' : 'Notebook');
+    const currentModelo = (currentTipo === 'CPU' ? (marcaModeloRef.current || 'Lenovo ThinkCentre M75q') : currentTipo === 'MONITOR' ? (marcaModeloRef.current && !marcaModeloRef.current.includes('ThinkCentre') ? marcaModeloRef.current : 'Monitor Dell / Lenovo') : 'Notebook');
 
     const novoItem = {
       id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       patrimonio: clean,
       numero_serie: serial,
-      tipo: currentTipo, // 100% CORRETO E ATUALIZADO
+      tipo: currentTipo,
       marca_modelo: currentModelo,
-      origem_recurso: origemRecursoRef.current || origemRecurso || 'PMAT / BNDES',
+      origem_recurso: origemRecursoRef.current || origemRecurso || 'Municipal',
       hora: nowTime,
       tipoEtiqueta: parseResult.label || 'Patrimônio Municipal'
     };
@@ -9767,15 +10150,12 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     setLoteItens((prev) => [novoItem, ...prev]);
   };
 
-  // Callback de detecção pela Câmera com Consenso Duplo
   const onBarcodeDetected = (decodedText) => {
     if (!decodedText || isProcessingRef.current) return;
     const now = Date.now();
 
     const parseResult = parseMunicipalBarcode(decodedText);
-    if (!parseResult.valid) {
-      return;
-    }
+    if (!parseResult.valid) return;
 
     const clean = parseResult.code;
 
@@ -9784,7 +10164,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       return;
     }
 
-    // 2. Filtro de Consenso Duplo (exige 2 frames idênticos em 500ms)
+    // Filtro de Consenso Duplo
     const cand = candidateRef.current;
     if (cand.code === clean && (now - cand.time < 500)) {
       cand.count += 1;
@@ -9793,9 +10173,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       return;
     }
 
-    if (cand.count < 2) {
-      return;
-    }
+    if (cand.count < 2) return;
 
     candidateRef.current = { code: '', count: 0, time: 0 };
     lastScannedCodeRef.current = clean;
@@ -9804,7 +10182,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     handleRegisterCodeNovos(parseResult);
   };
 
-  // Ligar Câmera com alta precisão
   const startCamera = async (camId) => {
     setCameraError(null);
     try {
@@ -9837,7 +10214,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
           fps: 15,
           qrbox: (viewfinderWidth, viewfinderHeight) => {
             const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const boxSize = Math.max(180, Math.min(Math.floor(minEdge * 0.8), 280));
+            const boxSize = Math.max(200, Math.min(Math.floor(minEdge * 0.82), 320));
             return { width: boxSize, height: boxSize };
           },
           aspectRatio: 1.0,
@@ -9854,7 +10231,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
       setIsScanning(true);
 
-      // Detectar lanterna e zoom
       try {
         const track = scanner.getRunningTrackCameraCapabilities();
         if (track) {
@@ -9868,298 +10244,50 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
             setZoomLevel(zf.value() || 1);
           }
         }
-      } catch (e) {
-        try {
-          const video = document.querySelector("#camera-reader-novos video");
-          const track = video?.srcObject?.getVideoTracks?.()[0];
-          const caps = track?.getCapabilities?.() || {};
-          if (caps.torch) setHasTorch(true);
-          if (caps.zoom) {
-            setHasZoom(true);
-            setZoomMinMax({ min: caps.zoom.min || 1, max: Math.min(caps.zoom.max || 4, 3), step: caps.zoom.step || 0.1 });
-          }
-        } catch (err2) {}
-      }
+      } catch (e) {}
     } catch (err) {
-      console.error('Erro ao ligar câmera:', err);
-      setCameraError('Permissão de câmera negada ou dispositivo indisponível.');
+      console.error("Erro ao iniciar câmera de novos:", err);
+      setCameraError(err.message || 'Não foi possível acessar a câmera.');
       setIsScanning(false);
     }
   };
 
   const stopCamera = async () => {
-    if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-      try {
+    try {
+      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
         await html5QrCodeRef.current.stop();
-      } catch (e) {}
-    }
+      }
+    } catch (e) {}
     setIsScanning(false);
     setTorchOn(false);
-    setDuplicateAlert(null);
+    setHasTorch(false);
+    setHasZoom(false);
   };
 
   const toggleTorch = async () => {
-    if (!html5QrCodeRef.current) return;
+    if (!html5QrCodeRef.current || !hasTorch) return;
     try {
       const nextTorch = !torchOn;
       await html5QrCodeRef.current.applyVideoConstraints({
         advanced: [{ torch: nextTorch }]
       });
       setTorchOn(nextTorch);
-    } catch (e) {
-      console.warn('Torch não suportado:', e);
-    }
+    } catch (e) {}
   };
 
   const handleZoomChange = async (newZoom) => {
-    setZoomLevel(newZoom);
-    if (!html5QrCodeRef.current) return;
+    if (!html5QrCodeRef.current || !hasZoom) return;
     try {
       await html5QrCodeRef.current.applyVideoConstraints({
         advanced: [{ zoom: Number(newZoom) }]
       });
-    } catch (e) {
-      try {
-        const video = document.querySelector("#camera-reader-novos video");
-        const track = video?.srcObject?.getVideoTracks?.()[0];
-        if (track && track.applyConstraints) {
-          await track.applyConstraints({ advanced: [{ zoom: Number(newZoom) }] });
-        }
-      } catch (err2) {}
-    }
-  };
-
-  // Inicializar lista de câmeras
-  useEffect(() => {
-    Html5Qrcode.getCameras()
-      .then((devices) => {
-        if (devices && devices.length > 0) {
-          setAvailableCameras(devices);
-          const backCam = devices.find(
-            (d) => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('traseira') || d.label.toLowerCase().includes('rear')
-          );
-          setSelectedCameraId(backCam ? backCam.id : devices[0].id);
-        }
-      })
-      .catch(() => {});
-
-    return () => {
-      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-        try { html5QrCodeRef.current.stop(); } catch (e) {}
-      }
-    };
-  }, []);
-
-  // Ao trocar de subaba, desligar câmera
-  useEffect(() => {
-    if (activeSubTab !== 'bipagem') {
-      stopCamera();
-    }
-  }, [activeSubTab]);
-
-  // Submissão manual pelo input de texto
-  const handleBiparManual = (e) => {
-    if (e) e.preventDefault();
-    const raw = (barcodeInput || '').trim();
-    if (!raw) return;
-
-    const parsed = parseMunicipalBarcode(raw);
-    handleRegisterCodeNovos(parsed);
-    setBarcodeInput('');
-    setTimeout(() => inputRef.current?.focus(), 50);
-  };
-
-  // Contadores do lote em tempo real
-  const loteStats = useMemo(() => {
-    let cpus = 0;
-    let monitores = 0;
-    let notebooks = 0;
-    loteItens.forEach((it) => {
-      if (it.tipo === 'CPU') cpus++;
-      else if (it.tipo === 'MONITOR') monitores++;
-      else if (it.tipo === 'NOTEBOOK') notebooks++;
-    });
-    return { cpus, monitores, notebooks, total: loteItens.length };
-  }, [loteItens]);
-
-  const handleRemoveItem = (id) => {
-    setLoteItens((prev) => prev.filter((it) => it.id !== id));
-  };
-
-  const handleGravarLote = async () => {
-    const locDest = (localidadeRef.current || localidade || '').trim();
-    if (!locDest) {
-      if (notify) notify('warning', 'Informe o nome da localidade de destino!');
-      return;
-    }
-    if (loteItens.length === 0) {
-      if (notify) notify('warning', 'Nenhum equipamento bipado para salvar.');
-      return;
-    }
-
-    setSalvandoLote(true);
-    try {
-      const loteId = `LOTE_NOVOS_${Date.now()}`;
-      const payload = {
-        lote_id: loteId,
-        localidade: locDest,
-        secretaria: (secretaria || '').trim() || null,
-        usuario: 'Almoxarifado / Galpão',
-        itens: loteItens.map((it) => ({
-          patrimonio: it.patrimonio,
-          numero_serie: it.numero_serie || null,
-          tipo: it.tipo,
-          marca_modelo: it.marca_modelo,
-          origem_recurso: it.origem_recurso
-        }))
-      };
-
-      const res = await fetch('/api/novos/expedir', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-
-      if (data.success) {
-        if (notify) notify('success', data.message || 'Saída expedida com sucesso!');
-        setTermoModalLote({
-          lote_id: loteId,
-          localidade: locDest,
-          secretaria: (secretaria || '').trim() || '',
-          data_expedicao: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR'),
-          usuario: 'Almoxarifado / Galpão',
-          itens: [...loteItens]
-        });
-        setLoteItens([]);
-        setUltimoBipado(null);
-        fetchResumo();
-        fetchExpedidos(1);
-      } else {
-        if (notify) notify('danger', data.message || 'Erro ao gravar lote.');
-      }
-    } catch (e) {
-      if (notify) notify('danger', 'Falha ao gravar lote.');
-    } finally {
-      setSalvandoLote(false);
-    }
-  };
-
-  const handleExcluirExpedido = async (id, pat) => {
-    if (!window.confirm(`Tem certeza que deseja excluir o patrimônio ${pat}?`)) return;
-    try {
-      const res = await fetch(`/api/novos/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        if (notify) notify('success', 'Registro excluído.');
-        fetchExpedidos(page);
-        fetchResumo();
-      } else {
-        if (notify) notify('danger', data.message || 'Erro ao excluir.');
-      }
-    } catch (e) {
-      if (notify) notify('danger', 'Erro ao conectar ao servidor.');
-    }
-  };
-
-  const handleConsultarConciliacao = async (loc) => {
-    const targetLoc = loc || concilLocalidade;
-    if (!targetLoc) return;
-    setLoadingConcil(true);
-    try {
-      const res = await fetch(`/api/novos/conciliacao-localidade?localidade=${encodeURIComponent(targetLoc)}`);
-      const data = await res.json();
-      if (data.success) {
-        setConcilData(data);
-      } else {
-        if (notify) notify('warning', data.message || 'Localidade não encontrada.');
-      }
-    } catch (e) {
-      if (notify) notify('danger', 'Erro ao carregar conciliação.');
-    } finally {
-      setLoadingConcil(false);
-    }
-  };
-
-  const handleExportarHistorico = () => {
-    if (expedidosList.length === 0) return;
-    let csv = '\ufeffID;Lote;Localidade;Secretaria;Tipo;Patrimônio;Número de Série;Modelo;Origem Recurso;Data Expedição;Usuário;Origem Registro\r\n';
-    expedidosList.forEach((it) => {
-      csv += `"${it.id}";"${it.lote_id}";"${it.localidade}";"${it.secretaria || ''}";"${it.tipo}";"${it.patrimonio}";"${it.numero_serie || ''}";"${it.marca_modelo || ''}";"${it.origem_recurso || ''}";"${it.data_expedicao}";"${it.usuario || ''}";"${it.origem_registro || ''}"\r\n`;
-    });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `expedicao_equipamentos_novos_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    if (notify) notify('success', 'Planilha exportada com sucesso!');
-  };
-
-  const handleExecutarImportacao = async () => {
-    let rows = [];
-    try {
-      if (importJsonText.trim().startsWith('[')) {
-        rows = JSON.parse(importJsonText);
-      } else {
-        const lines = importJsonText.trim().split('\n');
-        if (lines.length > 1) {
-          const headers = lines[0].split(/[;,\t]/).map((h) => h.trim().toLowerCase());
-          for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(/[;,\t]/).map((c) => c.trim().replace(/^"|"$/g, ''));
-            if (cols.length >= 2) {
-              const obj = {};
-              headers.forEach((h, idx) => {
-                if (h.includes('patrimon') || h === 'tag' || h === 'pat') obj.patrimonio = cols[idx];
-                else if (h.includes('local') || h.includes('destin') || h.includes('unid')) obj.localidade = cols[idx];
-                else if (h.includes('tipo')) obj.tipo = cols[idx];
-                else if (h.includes('serie') || h.includes('serial') || h === 'sn') obj.numero_serie = cols[idx];
-                else if (h.includes('model')) obj.marca_modelo = cols[idx];
-                else if (h.includes('sec')) obj.secretaria = cols[idx];
-                else if (h.includes('data')) obj.data_expedicao = cols[idx];
-              });
-              if (obj.patrimonio) rows.push(obj);
-            }
-          }
-        }
-      }
-    } catch (e) {
-      if (notify) notify('danger', 'Erro no formato dos dados de importação.');
-      return;
-    }
-
-    if (rows.length === 0) {
-      if (notify) notify('warning', 'Nenhum registro válido detectado para importar.');
-      return;
-    }
-
-    setImportando(true);
-    try {
-      const res = await fetch('/api/novos/importar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itens: rows, usuario: 'Importação Histórica' })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setImportResultado(data);
-        if (notify) notify('success', data.message);
-        fetchResumo();
-        fetchExpedidos(1);
-      } else {
-        if (notify) notify('danger', data.message || 'Erro na importação.');
-      }
-    } catch (e) {
-      if (notify) notify('danger', 'Falha ao processar importação no servidor.');
-    } finally {
-      setImportando(false);
-    }
+      setZoomLevel(newZoom);
+    } catch (e) {}
   };
 
   return (
     <div className="d-flex flex-column gap-2 pb-5">
-      {/* 1. HEADER COMPACTO COM ABAS INTEGRADAS (CAMERA-FIRST NO CELULAR) */}
+      {/* 1. HEADER COMPACTO COM ABAS INTEGRADAS */}
       <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
         <div className="card-body p-2 p-sm-3">
           <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
@@ -10175,12 +10303,12 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   Expedição de Novos
                 </span>
                 <span className="text-muted fs-10 font-monospace">
-                  PMAT / BNDES
+                  Equipamentos Municipais
                 </span>
               </div>
             </div>
 
-            {/* Mini contadores de status do galpão */}
+            {/* Mini contadores de status */}
             <div className="d-flex align-items-center gap-1 font-monospace">
               <span className="badge bg-soft-primary text-primary fs-11 px-2 py-1">
                 💻 {resumo?.kpis?.totalCpus || 0}
@@ -10191,7 +10319,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
             </div>
           </div>
 
-          {/* 4 ABAS COMPACTAS QUE CABEM NA TELA SEM CORTAR */}
+          {/* 4 ABAS COMPACTAS */}
           <div className="d-flex gap-1" role="tablist">
             <button
               type="button"
@@ -10216,7 +10344,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 activeSubTab === 'historico' ? 'btn-primary' : 'btn-soft-secondary'
               }`}
               style={{ borderRadius: '8px', fontSize: '12px' }}
-              onClick={() => { setActiveSubTab('historico'); fetchExpedidos(1); }}
+              onClick={() => { setActiveSubTab('historico'); fetchLotes(); fetchExpedidos(1); }}
             >
               <i className="ri-file-list-3-line"></i>
               <span>Histórico</span>
@@ -10250,7 +10378,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       </div>
 
       {/* ========================================================= */}
-      {/* ABA 1: BIPAGEM DIRETA (CAMERA-FIRST - ENTRA DIRETAMENTE NO FOCO) */}
+      {/* ABA 1: BIPAGEM DIRETA (CAMERA-FIRST) */}
       {/* ========================================================= */}
       {activeSubTab === 'bipagem' && (
         <div className="d-flex flex-column gap-2">
@@ -10288,7 +10416,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 </datalist>
               </div>
 
-              {/* Opções extras colapsáveis para não ocupar espaço no celular */}
+              {/* Opções extras colapsáveis */}
               {showConfigExtra && (
                 <div className="row g-2 pt-1 border-top">
                   <div className="col-6">
@@ -10316,7 +10444,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 </div>
               )}
 
-              {/* 3 BOTÕES LARGOS DE SELEÇÃO RÁPIDA DE TIPO (TOUCH ERGONÔMICO) */}
+              {/* 3 BOTÕES LARGOS DE SELEÇÃO RÁPIDA DE TIPO */}
               <div className="row g-2 pt-1">
                 <div className="col-4">
                   <button
@@ -10381,7 +10509,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
             </div>
           </div>
 
-          {/* BLOCO 2: VISOR DA CÂMERA AO VIVO COM FOCO DIRETO */}
+          {/* BLOCO 2: VISOR DA CÂMERA AO VIVO */}
           <div className="card border shadow-sm mb-0 overflow-hidden" style={{ borderRadius: '12px' }}>
             <div className="card-header bg-dark text-white d-flex align-items-center justify-content-between py-2 px-3">
               <div className="d-flex align-items-center gap-2">
@@ -10394,7 +10522,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
               </div>
 
               <div className="d-flex align-items-center gap-1">
-                {/* Lanterna / Flash */}
                 {hasTorch && isScanning && (
                   <button
                     type="button"
@@ -10407,7 +10534,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   </button>
                 )}
 
-                {/* Zoom */}
                 {hasZoom && isScanning && (
                   <button
                     type="button"
@@ -10419,261 +10545,171 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   </button>
                 )}
 
-                {/* Botão Câmera */}
                 {isScanning ? (
                   <button
                     type="button"
                     className="btn btn-sm btn-danger px-2 py-0 fw-bold fs-11 d-flex align-items-center gap-1"
-                    style={{ height: '28px' }}
                     onClick={stopCamera}
+                    style={{ height: '28px' }}
                   >
                     <i className="ri-stop-circle-line"></i> Pausar
                   </button>
                 ) : (
                   <button
                     type="button"
-                    className="btn btn-sm btn-success px-3 py-0 fw-bold fs-11 d-flex align-items-center gap-1"
-                    style={{ height: '28px' }}
+                    className="btn btn-sm btn-success px-2 py-0 fw-bold fs-11 d-flex align-items-center gap-1"
                     onClick={() => startCamera(selectedCameraId)}
+                    style={{ height: '28px' }}
                   >
-                    <i className="ri-camera-lens-line"></i> Iniciar Câmera
+                    <i className="ri-camera-lens-line"></i> Ligar Câmera
                   </button>
                 )}
               </div>
             </div>
 
-            <div
-              className="card-body p-0 bg-dark text-center position-relative overflow-hidden"
-              style={{
-                minHeight: '260px',
-                maxHeight: '300px',
-                transition: 'box-shadow 0.15s ease',
-                boxShadow: flashFeedback === 'success'
-                  ? 'inset 0 0 0 10px #0ab39c, 0 0 40px #0ab39c'
-                  : flashFeedback === 'duplicate'
-                  ? 'inset 0 0 0 12px #ff9800, 0 0 45px #ff9800'
-                  : 'none'
-              }}
-            >
-              {/* Container do Scanner */}
+            <div className="card-body p-0 position-relative bg-black" style={{ minHeight: '220px' }}>
               <div
                 id="camera-reader-novos"
-                style={{ width: '100%', minHeight: '260px', maxHeight: '300px', background: '#000' }}
-              ></div>
+                style={{
+                  width: '100%',
+                  minHeight: '220px',
+                  maxHeight: '320px',
+                  overflow: 'hidden'
+                }}
+              />
 
-              {/* Indicador Flutuante no Topo do Visor */}
-              <div
-                className="position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill bg-dark bg-opacity-75 text-white fs-11 fw-bold shadow-sm d-flex align-items-center gap-2"
-                style={{ zIndex: 6, backdropFilter: 'blur(6px)', border: '1px solid rgba(255,255,255,0.2)' }}
-              >
-                <span className="badge bg-success font-monospace">{loteItens.length} no lote</span>
-                <span className="text-warning font-monospace">Bipando: {tipoAtivo}</span>
-              </div>
-
-              {/* Mira Óptica com Retículo de 4 Cantos e Guias */}
-              {isScanning && (
-                <div
-                  className="position-absolute top-50 start-50 translate-middle pointer-events-none"
-                  style={{
-                    width: 'min(220px, 70vw)',
-                    height: 'min(220px, 70vw)',
-                    border: '1.5px dashed rgba(255, 255, 255, 0.45)',
-                    borderRadius: '14px',
-                    zIndex: 4,
-                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.45)'
-                  }}
-                >
-                  <div style={{ position: 'absolute', top: '-2px', left: '-2px', width: '20px', height: '20px', borderTop: '4px solid #10b981', borderLeft: '4px solid #10b981', borderTopLeftRadius: '12px' }}></div>
-                  <div style={{ position: 'absolute', top: '-2px', right: '-2px', width: '20px', height: '20px', borderTop: '4px solid #10b981', borderRight: '4px solid #10b981', borderTopRightRadius: '12px' }}></div>
-                  <div style={{ position: 'absolute', bottom: '-2px', left: '-2px', width: '20px', height: '20px', borderBottom: '4px solid #10b981', borderLeft: '4px solid #10b981', borderBottomLeftRadius: '12px' }}></div>
-                  <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', width: '20px', height: '20px', borderBottom: '4px solid #10b981', borderRight: '4px solid #10b981', borderBottomRightRadius: '12px' }}></div>
-                  <div style={{ position: 'absolute', top: '50%', left: '6px', right: '6px', height: '2px', background: 'rgba(239, 68, 68, 0.9)', boxShadow: '0 0 8px #ef4444' }}></div>
-
-                  <span
-                    style={{
-                      position: 'absolute',
-                      top: '-22px',
-                      left: '50%',
-                      transform: 'translateX(-50%)',
-                      fontSize: '10px',
-                      color: '#34d399',
-                      fontWeight: 700,
-                      whiteSpace: 'nowrap',
-                      textShadow: '0 1px 3px rgba(0,0,0,0.95)'
-                    }}
-                  >
-                    FOQUE NO PATRIMÔNIO
-                  </span>
-                </div>
-              )}
-
-              {/* Feedback Flash */}
-              {flashFeedback && (
-                <div
-                  className={`position-absolute top-0 start-0 end-0 p-2 text-white fw-bold text-center fs-14 shadow ${
-                    flashFeedback === 'success'
-                      ? 'bg-success'
-                      : flashFeedback === 'duplicate'
-                      ? 'bg-warning text-dark border-bottom border-dark'
-                      : 'bg-danger'
-                  }`}
-                  style={{ zIndex: 10 }}
-                >
-                  {flashFeedback === 'duplicate'
-                    ? `⚠️ ATENÇÃO: ${lastScannedCodeRef.current} já foi lido!`
-                    : ultimoBipado
-                    ? `✓ ${ultimoBipado.patrimonio} (${ultimoBipado.tipo}) Adicionado!`
-                    : '✓ EQUIPAMENTO ADICIONADO!'}
-                </div>
-              )}
-
-              {/* Estado Ocioso */}
               {!isScanning && (
                 <div
-                  className="position-absolute top-50 start-50 translate-middle text-center w-100 p-3"
-                  style={{ zIndex: 5 }}
+                  className="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column align-items-center justify-content-center text-center p-3 text-white"
+                  style={{ background: 'rgba(15, 23, 42, 0.88)', zIndex: 10 }}
                 >
-                  <div className="avatar-sm rounded-circle bg-soft-success mx-auto d-flex align-items-center justify-content-center text-success fs-22 mb-2">
-                    <i className="ri-qr-scan-2-line"></i>
-                  </div>
-                  <h6 className="text-white fs-14 mb-1">Câmera Pronta</h6>
-                  <p className="text-light opacity-75 fs-11 mb-2">
-                    Toque abaixo para ativar a câmera e apontar para as máquinas.
+                  <i className="ri-camera-fill text-muted fs-40 mb-2"></i>
+                  <h6 className="text-white fs-13 mb-1">Câmera em Espera</h6>
+                  <p className="text-muted fs-11 mb-2" style={{ maxWidth: '280px' }}>
+                    Toque no botão abaixo para escanear patrimônios e números de série continuamente.
                   </p>
                   <button
                     type="button"
-                    className="btn btn-success btn-sm rounded-pill px-3 shadow"
+                    className="btn btn-success btn-sm px-3 fw-bold"
                     onClick={() => startCamera(selectedCameraId)}
                   >
-                    <i className="ri-camera-fill me-1"></i> Ativar Câmera
+                    <i className="ri-play-circle-line me-1"></i> Iniciar Câmera
                   </button>
                 </div>
               )}
 
-              {cameraError && (
-                <div className="alert alert-warning m-2 text-start fs-11 p-2" role="alert">
-                  <i className="ri-error-warning-line me-1"></i> {cameraError}
+              {flashFeedback === 'success' && (
+                <div
+                  className="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center pointer-events-none"
+                  style={{ background: 'rgba(16, 185, 129, 0.45)', zIndex: 20 }}
+                >
+                  <i className="ri-checkbox-circle-fill text-white fs-48"></i>
+                </div>
+              )}
+
+              {flashFeedback === 'duplicate' && (
+                <div
+                  className="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center pointer-events-none"
+                  style={{ background: 'rgba(239, 68, 68, 0.55)', zIndex: 20 }}
+                >
+                  <i className="ri-error-warning-fill text-white fs-48"></i>
+                </div>
+              )}
+
+              {duplicateAlert && (
+                <div
+                  className="position-absolute bottom-0 start-0 w-100 p-2 text-center text-white fw-bold fs-11"
+                  style={{ background: 'rgba(220, 38, 38, 0.95)', zIndex: 25 }}
+                >
+                  <i className="ri-alert-fill me-1"></i> {duplicateAlert.message}
                 </div>
               )}
             </div>
 
-            {/* Alerta de Duplicidade */}
-            {duplicateAlert && (
-              <div className="alert alert-warning border border-warning shadow-sm mx-2 mt-2 mb-0 p-2 d-flex align-items-center justify-content-between">
-                <div className="d-flex align-items-center gap-1">
-                  <i className="ri-lock-2-line fs-14 text-warning"></i>
-                  <span className="fs-11 fw-bold">{duplicateAlert.message}</span>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-link p-0 text-decoration-none"
-                  onClick={() => setDuplicateAlert(null)}
-                >
-                  <i className="ri-close-line fs-14"></i>
+            {/* Input manual de fallback */}
+            <div className="card-footer p-2 bg-light border-top">
+              <form onSubmit={handleBiparManual} className="d-flex gap-1">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  className="form-control form-control-sm font-monospace fs-12"
+                  placeholder="Digitar patrimônio ou serial manualmente..."
+                  value={barcodeInput}
+                  onChange={(e) => setBarcodeInput(e.target.value)}
+                />
+                <button type="submit" className="btn btn-primary btn-sm px-3 fw-bold">
+                  Bipar
                 </button>
-              </div>
-            )}
-
-            {/* Entrada Manual Compacta */}
-            <div className="p-2 border-top bg-body-tertiary">
-              <form onSubmit={handleBiparManual}>
-                <div className="input-group input-group-sm">
-                  <span className="input-group-text bg-body text-muted">
-                    <i className="ri-keyboard-line fs-14"></i>
-                  </span>
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    className="form-control font-monospace fw-bold fs-13"
-                    placeholder={`Digitar patrimônio do ${tipoAtivo}...`}
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                  />
-                  <button type="submit" className="btn btn-primary fw-semibold px-3">
-                    Adicionar
-                  </button>
-                </div>
               </form>
             </div>
           </div>
 
-          {/* BLOCO 3: RESUMO DO LOTE & FINALIZAÇÃO (DESTAQUE GRANDE) */}
-          <div className="card shadow-xs border mb-0" style={{ borderRadius: '12px' }}>
+          {/* BLOCO 3: BARRA DE GRAVAÇÃO DO LOTE COM BOTÃO EM DESTAQUE */}
+          <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
             <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
-              <div className="d-flex align-items-center justify-content-between">
-                <div>
-                  <span className="fs-13 fw-bold text-body d-block">
-                    Lote Atual: {loteStats.total} {loteStats.total === 1 ? 'item' : 'itens'}
-                  </span>
-                  <span className="text-muted fs-11">
-                    💻 {loteStats.cpus} CPUs • 🖥️ {loteStats.monitores} Monitores {loteStats.notebooks > 0 ? `• 💼 ${loteStats.notebooks} Notes` : ''}
-                  </span>
-                </div>
-
-                {loteItens.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-soft-danger btn-sm px-2 py-1 fs-11"
-                    onClick={() => {
-                      if (window.confirm('Deseja limpar todos os itens deste lote não salvo?')) setLoteItens([]);
-                    }}
-                  >
-                    <i className="ri-delete-bin-line me-1"></i> Limpar
-                  </button>
-                )}
+              <div className="d-flex align-items-center justify-content-between flex-wrap gap-1">
+                <span className="fs-12 fw-bold">
+                  📦 Lote Atual: <span className="font-monospace text-primary">{loteItens.length} itens</span>
+                </span>
+                <span className="fs-11 text-muted">
+                  💻 {loteStats.cpus} | 🖥️ {loteStats.monitores}
+                </span>
               </div>
 
-              {/* Botão de Gravar Saída (Grande e destacado) */}
               <button
                 type="button"
-                className="btn btn-success btn-lg w-100 fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2 py-2"
-                style={{ borderRadius: '10px' }}
-                onClick={handleGravarLote}
+                className="btn btn-success btn-lg w-100 fw-bold shadow-sm py-2 d-flex align-items-center justify-content-center gap-2"
+                style={{ borderRadius: '10px', fontSize: '15px' }}
                 disabled={salvandoLote || loteItens.length === 0}
+                onClick={handleGravarLote}
               >
-                <i className="ri-save-3-line fs-18"></i>
-                <span>{salvandoLote ? 'Gravando...' : `Gravar e Finalizar Saída (${loteItens.length} itens)`}</span>
+                {salvandoLote ? (
+                  <>
+                    <span className="spinner-border spinner-border-sm"></span>
+                    <span>Gravando Expedição...</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="ri-save-3-line fs-18"></i>
+                    <span>Gravar e Finalizar Saída ({loteItens.length})</span>
+                  </>
+                )}
               </button>
 
-              {/* Tabela Compacta de Itens Bipados */}
+              {/* Lista dos itens bipados no lote atual */}
               {loteItens.length > 0 && (
-                <div className="table-responsive border rounded mt-1" style={{ maxHeight: '220px', overflowY: 'auto' }}>
-                  <table className="table table-sm table-hover table-striped align-middle mb-0 fs-11">
-                    <thead className="table-light sticky-top">
+                <div className="table-responsive border rounded mt-1" style={{ maxHeight: '180px' }}>
+                  <table className="table table-sm table-hover mb-0 fs-11">
+                    <thead className="table-light">
                       <tr>
-                        <th style={{ width: '30px' }}>#</th>
-                        <th style={{ width: '65px' }}>Tipo</th>
+                        <th style={{ width: '25px' }}>#</th>
+                        <th>Tipo</th>
                         <th>Patrimônio</th>
                         <th>Hora</th>
-                        <th className="text-center" style={{ width: '40px' }}></th>
+                        <th style={{ width: '30px' }}></th>
                       </tr>
                     </thead>
                     <tbody>
                       {loteItens.map((it, idx) => (
                         <tr key={it.id}>
-                          <td className="text-muted font-monospace">{loteItens.length - idx}</td>
+                          <td className="text-muted font-monospace">{idx + 1}</td>
                           <td>
                             <span className={`badge font-monospace ${
-                              it.tipo === 'CPU' ? 'bg-soft-primary text-primary' : it.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
-                            } border`}>
+                              it.tipo === 'CPU' ? 'bg-primary' : it.tipo === 'MONITOR' ? 'bg-info' : 'bg-warning text-dark'
+                            }`} style={{ fontSize: '9px' }}>
                               {it.tipo}
                             </span>
                           </td>
+                          <td className="font-monospace fw-bold">{it.patrimonio}</td>
+                          <td className="text-muted fs-10 font-monospace">{it.hora}</td>
                           <td>
-                            <span className="font-monospace fw-bold">{it.patrimonio}</span>
-                            {it.numero_serie && (
-                              <span className="text-muted d-block fs-10">S/N: {it.numero_serie}</span>
-                            )}
-                          </td>
-                          <td className="text-muted font-monospace">{it.hora}</td>
-                          <td className="text-center">
                             <button
                               type="button"
                               className="btn btn-ghost-danger btn-sm p-0"
                               onClick={() => handleRemoveItem(it.id)}
-                              title="Remover"
+                              title="Remover do lote"
                             >
-                              <i className="ri-close-circle-line fs-16"></i>
+                              <i className="ri-close-line fs-14"></i>
                             </button>
                           </td>
                         </tr>
@@ -10688,258 +10724,441 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       )}
 
       {/* ========================================================= */}
-      {/* ABA 2: HISTÓRICO DE SAÍDAS / EXPEDIÇÕES */}
+      {/* ABA 2: HISTÓRICO COM SELETOR DE TERMOS GERADOS PARA DOWNLOAD */}
       {/* ========================================================= */}
       {activeSubTab === 'historico' && (
         <div className="d-flex flex-column gap-2">
+          {/* SELETOR DIRETO DE TERMOS GERADOS PARA VISUALIZAR / BAIXAR */}
           <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
             <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
-              <div className="row g-2 align-items-center">
-                <div className="col-12 col-md-5">
-                  <input
-                    type="text"
-                    className="form-control form-control-sm"
-                    placeholder="Buscar patrimônio, serial, localidade..."
-                    value={historicoSearch}
-                    onChange={(e) => setHistoricoSearch(e.target.value)}
-                  />
+              <div className="d-flex align-items-center justify-content-between">
+                <div className="d-flex align-items-center gap-2">
+                  <i className="ri-file-paper-2-line text-primary fs-18"></i>
+                  <span className="fs-13 fw-bold">Selecionar Termo Gerado:</span>
                 </div>
-                <div className="col-6 col-md-3">
+                <span className="badge bg-soft-primary text-primary font-monospace fs-11">
+                  {lotesList.length} termo(s) gerado(s)
+                </span>
+              </div>
+
+              <div className="row g-2 align-items-center">
+                <div className="col-12 col-md-7">
                   <select
-                    className="form-select form-select-sm"
-                    value={historicoTipo}
-                    onChange={(e) => setHistoricoTipo(e.target.value)}
+                    className="form-select form-select-sm fs-12 fw-semibold"
+                    value={selectedLoteId}
+                    onChange={(e) => {
+                      const lid = e.target.value;
+                      setSelectedLoteId(lid);
+                      if (lid) handleAbrirTermoLote(lid);
+                    }}
                   >
-                    <option value="">Todos os Tipos</option>
-                    <option value="CPU">💻 CPUs</option>
-                    <option value="MONITOR">🖥️ Monitores</option>
-                    <option value="NOTEBOOK">💼 Notebooks</option>
+                    <option value="">-- Escolha um termo de entrega gerado --</option>
+                    {lotesList.map((lt) => (
+                      <option key={lt.lote_id} value={lt.lote_id}>
+                        📍 {lt.localidade} ({lt.totalItens} itens: {lt.cpus} CPUs, {lt.monitores} Monitores) • {lt.data_expedicao}
+                      </option>
+                    ))}
                   </select>
                 </div>
-                <div className="col-6 col-md-4 text-end d-flex gap-1 justify-content-end">
+
+                <div className="col-12 col-md-5 d-flex gap-1">
                   <button
                     type="button"
-                    className="btn btn-soft-primary btn-sm px-2"
-                    onClick={() => fetchExpedidos(1)}
+                    className="btn btn-primary btn-sm flex-fill fw-bold d-flex align-items-center justify-content-center gap-1"
+                    disabled={!selectedLoteId || loadingLoteTermo}
+                    onClick={() => handleAbrirTermoLote(selectedLoteId)}
                   >
-                    <i className="ri-search-line me-1"></i> Filtrar
+                    {loadingLoteTermo ? (
+                      <span className="spinner-border spinner-border-sm"></span>
+                    ) : (
+                      <i className="ri-file-text-line"></i>
+                    )}
+                    <span>Abrir Termo</span>
                   </button>
+
                   <button
                     type="button"
-                    className="btn btn-soft-success btn-sm px-2"
-                    onClick={handleExportarHistorico}
-                    disabled={expedidosList.length === 0}
+                    className="btn btn-soft-success btn-sm flex-fill fw-bold d-flex align-items-center justify-content-center gap-1"
+                    disabled={!selectedLoteId}
+                    onClick={async () => {
+                      if (!selectedLoteId) return;
+                      try {
+                        const res = await fetch(`/api/novos/lote/${encodeURIComponent(selectedLoteId)}`);
+                        const data = await res.json();
+                        if (data.success && data.lote) {
+                          handleBaixarTermoHtml(data.lote);
+                        }
+                      } catch(e) {}
+                    }}
                   >
-                    <i className="ri-file-excel-2-line"></i> CSV
+                    <i className="ri-download-2-line"></i>
+                    <span>Baixar HTML</span>
                   </button>
                 </div>
               </div>
 
-              <div className="table-responsive border rounded mt-1" style={{ minHeight: '260px' }}>
-                <table className="table table-sm table-hover table-striped align-middle mb-0 fs-11">
-                  <thead className="table-light fw-bold">
-                    <tr>
-                      <th style={{ width: '35px' }}>#</th>
-                      <th>Data</th>
-                      <th>Destino</th>
-                      <th>Tipo</th>
-                      <th>Patrimônio</th>
-                      <th>Série</th>
-                      <th className="text-center" style={{ width: '40px' }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {loadingExpedidos ? (
-                      <tr>
-                        <td colSpan="7" className="text-center py-4 text-muted">
-                          <span className="spinner-border spinner-border-sm me-1"></span> Carregando...
-                        </td>
-                      </tr>
-                    ) : expedidosList.length === 0 ? (
-                      <tr>
-                        <td colSpan="7" className="text-center py-4 text-muted">
-                          Nenhum registro encontrado.
-                        </td>
-                      </tr>
-                    ) : (
-                      expedidosList.map((item, index) => (
-                        <tr key={item.id}>
-                          <td className="text-muted font-monospace">{(page - 1) * 50 + index + 1}</td>
-                          <td className="font-monospace fs-10 text-muted">{item.data_expedicao}</td>
-                          <td className="fw-bold">{item.localidade}</td>
-                          <td>
-                            <span className={`badge font-monospace ${
-                              item.tipo === 'CPU' ? 'bg-soft-primary text-primary' : item.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
-                            } border`}>
-                              {item.tipo}
-                            </span>
-                          </td>
-                          <td className="font-monospace fw-bold">{item.patrimonio}</td>
-                          <td className="font-monospace text-muted">{item.numero_serie || '-'}</td>
-                          <td className="text-center">
-                            <button
-                              type="button"
-                              className="btn btn-ghost-danger btn-sm p-0"
-                              onClick={() => handleExcluirExpedido(item.id, item.patrimonio)}
-                              title="Excluir"
-                            >
-                              <i className="ri-delete-bin-line fs-14"></i>
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+              {/* Botões alternadores: Lista de Termos vs Lista de Itens */}
+              <div className="d-flex align-items-center justify-content-between pt-2 border-top">
+                <div className="btn-group btn-group-sm" role="group">
+                  <button
+                    type="button"
+                    className={`btn ${historicoViewMode === 'termos' ? 'btn-primary fw-bold' : 'btn-outline-secondary'}`}
+                    onClick={() => setHistoricoViewMode('termos')}
+                  >
+                    <i className="ri-file-list-2-line me-1"></i> Termos por Localidade ({lotesList.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${historicoViewMode === 'itens' ? 'btn-primary fw-bold' : 'btn-outline-secondary'}`}
+                    onClick={() => setHistoricoViewMode('itens')}
+                  >
+                    <i className="ri-table-line me-1"></i> Todos os Itens ({resumo?.kpis?.totalExpedidos || 0})
+                  </button>
+                </div>
               </div>
+            </div>
+          </div>
 
-              {totalPages > 1 && (
-                <div className="d-flex align-items-center justify-content-between p-1">
-                  <span className="fs-11 text-muted">Pág {page}/{totalPages}</span>
-                  <div className="btn-group btn-group-sm">
+          {/* VISUALIZAÇÃO 1: CARDS DE TERMOS POR LOCALIDADE */}
+          {historicoViewMode === 'termos' && (
+            <div className="d-flex flex-column gap-2">
+              {lotesList.length === 0 ? (
+                <div className="card shadow-sm border p-4 text-center text-muted" style={{ borderRadius: '12px' }}>
+                  <i className="ri-file-paper-2-line fs-32 text-muted mb-2 d-block"></i>
+                  Nenhum termo de entrega gerado até o momento.<br />
+                  Ao finalizar uma expedição na aba <strong>Bipar</strong>, o termo será registrado aqui automaticamente!
+                </div>
+              ) : (
+                lotesList.map((lt) => (
+                  <div key={lt.lote_id} className="card shadow-sm border mb-0 p-3" style={{ borderRadius: '10px' }}>
+                    <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+                      <div>
+                        <h6 className="mb-0 fs-14 fw-bold">
+                          <i className="ri-map-pin-2-fill text-danger me-1"></i>
+                          {lt.localidade}
+                        </h6>
+                        {lt.secretaria && <span className="text-muted fs-11">{lt.secretaria} • </span>}
+                        <span className="text-muted fs-11 font-monospace">{lt.data_expedicao}</span>
+                      </div>
+                      <div className="d-flex align-items-center gap-1 font-monospace">
+                        <span className="badge bg-soft-primary text-primary fs-11">
+                          💻 {lt.cpus} CPUs
+                        </span>
+                        <span className="badge bg-soft-info text-info fs-11">
+                          🖥️ {lt.monitores} Monitores
+                        </span>
+                        <span className="badge bg-dark text-white fs-11">
+                          Total: {lt.totalItens}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="d-flex gap-2 justify-content-end">
+                      <button
+                        type="button"
+                        className="btn btn-soft-primary btn-sm fw-bold px-3 d-flex align-items-center gap-1"
+                        onClick={() => handleAbrirTermoLote(lt.lote_id)}
+                      >
+                        <i className="ri-file-text-line"></i> Abrir Termo
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline-success btn-sm fw-bold px-3 d-flex align-items-center gap-1"
+                        onClick={async () => {
+                          try {
+                            const res = await fetch(`/api/novos/lote/${encodeURIComponent(lt.lote_id)}`);
+                            const data = await res.json();
+                            if (data.success && data.lote) {
+                              handleBaixarTermoHtml(data.lote);
+                            }
+                          } catch(e) {}
+                        }}
+                      >
+                        <i className="ri-download-2-line"></i> Baixar HTML
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* VISUALIZAÇÃO 2: TABELA DE ITENS INDIVIDUAIS */}
+          {historicoViewMode === 'itens' && (
+            <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+              <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
+                <div className="row g-2 align-items-center">
+                  <div className="col-12 col-md-5">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm"
+                      placeholder="Buscar patrimônio, serial, localidade..."
+                      value={historicoSearch}
+                      onChange={(e) => setHistoricoSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className="col-6 col-md-3">
+                    <select
+                      className="form-select form-select-sm"
+                      value={historicoTipo}
+                      onChange={(e) => setHistoricoTipo(e.target.value)}
+                    >
+                      <option value="">Todos os Tipos</option>
+                      <option value="CPU">💻 CPUs</option>
+                      <option value="MONITOR">🖥️ Monitores</option>
+                      <option value="NOTEBOOK">💼 Notebooks</option>
+                    </select>
+                  </div>
+                  <div className="col-6 col-md-4 text-end d-flex gap-1 justify-content-end">
                     <button
                       type="button"
-                      className="btn btn-outline-secondary btn-sm py-0"
-                      disabled={page <= 1}
-                      onClick={() => fetchExpedidos(page - 1)}
+                      className="btn btn-soft-primary btn-sm px-2"
+                      onClick={() => fetchExpedidos(1)}
                     >
-                      Ant
+                      <i className="ri-search-line me-1"></i> Filtrar
                     </button>
                     <button
                       type="button"
-                      className="btn btn-outline-secondary btn-sm py-0"
-                      disabled={page >= totalPages}
-                      onClick={() => fetchExpedidos(page + 1)}
+                      className="btn btn-soft-success btn-sm px-2"
+                      onClick={handleExportarHistorico}
+                      disabled={expedidosList.length === 0}
                     >
-                      Próx
+                      <i className="ri-file-excel-2-line"></i> CSV
                     </button>
                   </div>
                 </div>
-              )}
+
+                <div className="table-responsive border rounded mt-1" style={{ minHeight: '260px' }}>
+                  <table className="table table-sm table-hover table-striped align-middle mb-0 fs-11">
+                    <thead className="table-light fw-bold">
+                      <tr>
+                        <th style={{ width: '35px' }}>#</th>
+                        <th>Data</th>
+                        <th>Destino</th>
+                        <th>Tipo</th>
+                        <th>Patrimônio</th>
+                        <th>Série</th>
+                        <th className="text-center" style={{ width: '40px' }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loadingExpedidos ? (
+                        <tr>
+                          <td colSpan="7" className="text-center py-4 text-muted">
+                            <span className="spinner-border spinner-border-sm me-1"></span> Carregando...
+                          </td>
+                        </tr>
+                      ) : expedidosList.length === 0 ? (
+                        <tr>
+                          <td colSpan="7" className="text-center py-4 text-muted">
+                            Nenhum registro encontrado.
+                          </td>
+                        </tr>
+                      ) : (
+                        expedidosList.map((item, index) => (
+                          <tr key={item.id}>
+                            <td className="text-muted font-monospace">{(page - 1) * 50 + index + 1}</td>
+                            <td className="font-monospace fs-10 text-muted">{item.data_expedicao}</td>
+                            <td className="fw-bold">{item.localidade}</td>
+                            <td>
+                              <span className={`badge font-monospace ${
+                                item.tipo === 'CPU' ? 'bg-soft-primary text-primary' : item.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
+                              } border`}>
+                                {item.tipo}
+                              </span>
+                            </td>
+                            <td className="font-monospace fw-bold">{item.patrimonio}</td>
+                            <td className="font-monospace text-muted">{item.numero_serie || '-'}</td>
+                            <td className="text-center">
+                              <button
+                                type="button"
+                                className="btn btn-ghost-danger btn-sm p-0"
+                                onClick={() => handleExcluirExpedido(item.id, item.patrimonio)}
+                                title="Excluir"
+                              >
+                                <i className="ri-delete-bin-line fs-14"></i>
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {totalPages > 1 && (
+                  <div className="d-flex align-items-center justify-content-between p-1">
+                    <span className="fs-11 text-muted">Pág {page}/{totalPages}</span>
+                    <div className="btn-group btn-group-sm">
+                      <button
+                        type="button"
+                        className="btn btn-outline-secondary btn-sm py-0"
+                        disabled={page <= 1}
+                        onClick={() => fetchExpedidos(page - 1)}
+                      >
+                        Anterior
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline-secondary btn-sm py-0"
+                        disabled={page >= totalPages}
+                        onClick={() => fetchExpedidos(page + 1)}
+                      >
+                        Próxima
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
       {/* ========================================================= */}
-      {/* ABA 3: BALANÇO NOVO X RETORNO EMC */}
+      {/* ABA 3: BALANÇO NOVO X EMC */}
       {/* ========================================================= */}
       {activeSubTab === 'conciliacao' && (
-        <div className="d-flex flex-column gap-2">
-          <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
-            <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
+        <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+          <div className="card-body p-2 p-sm-3 d-flex flex-column gap-3">
+            <div>
               <label className="form-label fs-12 fw-bold mb-1">
-                Localidade para Balanço (Novos Entregues vs. Retornados EMC):
+                <i className="ri-search-eye-line text-primary me-1"></i>
+                Selecione ou digite a Localidade para Balanço:
               </label>
-              <div className="d-flex gap-2">
+              <div className="input-group input-group-sm">
                 <input
                   type="text"
-                  className="form-control form-control-sm"
-                  placeholder="Escolha a unidade..."
+                  className="form-control fs-13"
+                  placeholder="Ex: CRAS Industrial, SEDE..."
                   value={concilLocalidade}
                   onChange={(e) => setConcilLocalidade(e.target.value)}
                   list="concil-datalist"
                 />
                 <datalist id="concil-datalist">
-                  {(resumo?.localidadesDisponiveis || []).map((l) => (
-                    <option key={l} value={l} />
+                  {(resumo?.localidadesDisponiveis || []).map((loc) => (
+                    <option key={loc} value={loc} />
                   ))}
                 </datalist>
                 <button
                   type="button"
-                  className="btn btn-primary btn-sm fw-bold px-3 text-nowrap"
+                  className="btn btn-primary fw-bold"
+                  disabled={!concilLocalidade.trim() || loadingConcil}
                   onClick={() => handleConsultarConciliacao()}
-                  disabled={loadingConcil || !concilLocalidade.trim()}
                 >
-                  {loadingConcil ? '...' : 'Consultar'}
+                  {loadingConcil ? (
+                    <span className="spinner-border spinner-border-sm"></span>
+                  ) : (
+                    <>
+                      <i className="ri-scales-line me-1"></i> Comparar
+                    </>
+                  )}
                 </button>
               </div>
-
-              {concilData && (
-                <div className="card border shadow-xs mb-0 mt-2">
-                  <div className="card-header bg-soft-primary border-bottom py-2 px-3">
-                    <h6 className="card-title mb-0 fs-13 fw-bold text-primary">
-                      <i className="ri-building-line me-1"></i> {concilData.localidade}
-                    </h6>
-                  </div>
-                  <div className="card-body p-2">
-                    <div className="row g-2 text-center">
-                      <div className="col-4">
-                        <div className="p-2 rounded bg-soft-success border border-success-subtle">
-                          <span className="text-success fs-10 text-uppercase fw-bold d-block">Novos</span>
-                          <h5 className="mb-0 fs-16 font-monospace text-success fw-bold">
-                            {concilData.resumo?.novosExpedidosTotal || 0}
-                          </h5>
-                          <small className="text-muted" style={{ fontSize: '9px' }}>
-                            {concilData.resumo?.novosCpus || 0} CPU | {concilData.resumo?.novosMonitores || 0} Mon
-                          </small>
-                        </div>
-                      </div>
-
-                      <div className="col-4">
-                        <div className="p-2 rounded bg-soft-warning border border-warning-subtle">
-                          <span className="text-warning fs-10 text-uppercase fw-bold d-block">EMC Galpão</span>
-                          <h5 className="mb-0 fs-16 font-monospace text-warning fw-bold">
-                            {concilData.resumo?.emcRecolhidosGalpaoTotal || 0}
-                          </h5>
-                          <small className="text-muted" style={{ fontSize: '9px' }}>
-                            {concilData.resumo?.emcCpus || 0} CPU | {concilData.resumo?.emcMonitores || 0} Mon
-                          </small>
-                        </div>
-                      </div>
-
-                      <div className="col-4">
-                        <div className={`p-2 rounded border ${
-                          (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'bg-soft-danger border-danger-subtle' : 'bg-soft-info border-info-subtle'
-                        }`}>
-                          <span className="fs-10 text-uppercase fw-bold d-block">Saldo</span>
-                          <h5 className={`mb-0 fs-16 font-monospace fw-bold ${
-                            (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'text-danger' : 'text-info'
-                          }`}>
-                            {concilData.resumo?.saldoRetornoTotal || 0}
-                          </h5>
-                          <small className="text-muted" style={{ fontSize: '9px' }}>
-                            {concilData.resumo?.saldoCpus || 0} CPU | {concilData.resumo?.saldoMonitores || 0} Mon
-                          </small>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
+
+            {concilData && (
+              <div className="d-flex flex-column gap-3">
+                <div className="p-2 rounded bg-light border">
+                  <h6 className="mb-1 fs-13 fw-bold text-dark">
+                    Localidade: {concilData.localidade}
+                  </h6>
+                  <span className="text-muted fs-11">
+                    Comparativo direto entre novos equipamentos expedidos e equipamentos EMC recolhidos no galpão.
+                  </span>
+                </div>
+
+                <div className="table-responsive border rounded">
+                  <table className="table table-sm table-bordered align-middle text-center mb-0 fs-12">
+                    <thead className="table-light">
+                      <tr>
+                        <th className="text-start">Tipo Ativo</th>
+                        <th className="bg-soft-primary text-primary">Novos Entregues</th>
+                        <th className="bg-soft-warning text-warning">EMC Recolhidos</th>
+                        <th>Saldo Pendente</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td className="text-start fw-bold">💻 CPUs</td>
+                        <td className="font-monospace fw-bold text-primary">{concilData.novos.cpus}</td>
+                        <td className="font-monospace fw-bold text-warning">{concilData.emc.cpus}</td>
+                        <td className="font-monospace fw-bold">
+                          {concilData.balanco.saldoCpus === 0 ? (
+                            <span className="badge bg-success">100% Equalizado</span>
+                          ) : concilData.balanco.saldoCpus > 0 ? (
+                            <span className="badge bg-warning text-dark">+{concilData.balanco.saldoCpus} Novos a mais</span>
+                          ) : (
+                            <span className="badge bg-danger">{concilData.balanco.saldoCpus} EMC a recolher</span>
+                          )}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="text-start fw-bold">🖥️ Monitores</td>
+                        <td className="font-monospace fw-bold text-info">{concilData.novos.monitores}</td>
+                        <td className="font-monospace fw-bold text-warning">{concilData.emc.monitores}</td>
+                        <td className="font-monospace fw-bold">
+                          {concilData.balanco.saldoMonitores === 0 ? (
+                            <span className="badge bg-success">100% Equalizado</span>
+                          ) : concilData.balanco.saldoMonitores > 0 ? (
+                            <span className="badge bg-warning text-dark">+{concilData.balanco.saldoMonitores} Novos a mais</span>
+                          ) : (
+                            <span className="badge bg-danger">{concilData.balanco.saldoMonitores} EMC a recolher</span>
+                          )}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* ========================================================= */}
-      {/* ABA 4: IMPORTAR DADOS DO APP ANTERIOR */}
+      {/* ABA 4: IMPORTADOR DE DADOS */}
       {/* ========================================================= */}
       {activeSubTab === 'importar' && (
-        <div className="d-flex flex-column gap-2">
-          <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
-            <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
-              <span className="fs-12 text-muted">
-                Cole a planilha (CSV ou JSON) dos equipamentos novos já entregues:
-              </span>
+        <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+          <div className="card-body p-2 p-sm-3 d-flex flex-column gap-3">
+            <div>
+              <h6 className="fs-13 fw-bold mb-1">
+                <i className="ri-upload-cloud-2-line text-success me-1"></i>
+                Importador de Dados de Expedição
+              </h6>
+              <p className="text-muted fs-11 mb-2">
+                Cole aqui uma lista JSON de equipamentos expedidos anteriormente para importar diretamente para o sistema.
+              </p>
               <textarea
                 className="form-control font-monospace fs-11"
-                rows="6"
-                placeholder={"patrimonio;localidade;tipo;numero_serie;marca_modelo\n100039491;CRAS Industrial;CPU;PE0FPFRT;Lenovo M75q"}
+                rows={6}
+                placeholder='[{"localidade":"CRAS Industrial","secretaria":"SMDS","tipo":"CPU","patrimonio":"100039491","numero_serie":"PE0FPFRT","marca_modelo":"Lenovo ThinkCentre M75q"}]'
                 value={importJsonText}
                 onChange={(e) => setImportJsonText(e.target.value)}
-              ></textarea>
+              />
+            </div>
+
+            <div className="d-flex align-items-center justify-content-between">
               <button
                 type="button"
-                className="btn btn-success btn-sm fw-bold w-100 py-2"
-                onClick={handleExecutarImportacao}
+                className="btn btn-primary btn-sm px-3 fw-bold"
                 disabled={importando || !importJsonText.trim()}
+                onClick={handleExecutarImportacao}
               >
-                {importando ? 'Importando...' : 'Importar Dados Agora'}
+                {importando ? (
+                  <>
+                    <span className="spinner-border spinner-border-sm me-1"></span> Importando...
+                  </>
+                ) : (
+                  <>
+                    <i className="ri-check-line me-1"></i> Processar Importação
+                  </>
+                )}
               </button>
 
               {importResultado && (
-                <div className="alert alert-success border-success-subtle mt-2 fs-11 p-2">
+                <div className="alert alert-success mb-0 py-1 px-2 fs-11">
                   <strong>Resultado:</strong> {importResultado.message} (Inseridos: {importResultado.inseridos})
                 </div>
               )}
@@ -10948,14 +11167,16 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
         </div>
       )}
 
-      {/* MODAL / TERMO DE ENTREGA FORMAL (PARA IMPRESSÃO E ASSINATURA) */}
+      {/* ========================================================= */}
+      {/* MODAL / TERMO DE ENTREGA FORMAL (SEM PMAT/BNDES, SEM GALPÃO) */}
+      {/* ========================================================= */}
       {termoModalLote && (
         <div className="modal fade show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.65)', zIndex: 1055 }} tabIndex="-1">
           <div className="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
             <div className="modal-content shadow-lg border-0">
-              <div className="modal-header bg-dark text-white py-2 px-3">
+              <div className="modal-header bg-dark text-white py-2 px-3 d-print-none">
                 <h5 className="modal-title fs-15 fw-bold d-flex align-items-center gap-2">
-                  <i className="ri-file-paper-2-line text-warning"></i> Termo de Entrega de Equipamentos Novos
+                  <i className="ri-file-paper-2-line text-warning"></i> Termo de Entrega de Equipamentos
                 </h5>
                 <button
                   type="button"
@@ -10970,7 +11191,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                   <h4 className="fw-bold mb-1 fs-18 text-uppercase">Prefeitura Municipal de Contagem</h4>
                   <h6 className="text-muted fs-13 mb-1">Superintendência de Tecnologia da Informação • STI</h6>
                   <span className="badge bg-dark text-white font-monospace px-3 py-1 fs-12">
-                    TERMO DE ENTREGA E INSTALAÇÃO • PMAT / BNDES
+                    TERMO DE ENTREGA E RECEBIMENTO DE EQUIPAMENTOS
                   </span>
                 </div>
 
@@ -10985,7 +11206,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                     <strong>Data da Expedição:</strong> {termoModalLote.data_expedicao}
                   </div>
                   <div className="col-sm-6">
-                    <strong>Responsável Galpão:</strong> {termoModalLote.usuario}
+                    <strong>Responsável TI:</strong> {termoModalLote.usuario || 'Responsável TI'}
                   </div>
                 </div>
 
@@ -10998,7 +11219,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                         <th>Patrimônio Municipal</th>
                         <th>Nº de Série</th>
                         <th>Modelo / Descrição</th>
-                        <th>Origem Recurso</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -11009,32 +11229,35 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                           <td className="font-monospace fw-bold fs-12">{it.patrimonio}</td>
                           <td className="font-monospace text-muted">{it.numero_serie || '-'}</td>
                           <td>{it.marca_modelo}</td>
-                          <td>{it.origem_recurso || 'PMAT / BNDES'}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
 
+                <div className="p-2 mb-4 fs-12 text-muted border-start border-3 border-dark bg-light rounded-end">
+                  Declaro para os devidos fins que recebi os equipamentos de informática acima especificados em perfeito estado de conservação e funcionamento para atendimento às necessidades desta unidade.
+                </div>
+
                 <div className="border-top pt-4 mt-5">
                   <div className="row text-center fs-12">
                     <div className="col-6">
                       <div className="border-top border-dark mx-4 pt-1">
-                        <strong>Entregue por (Galpão / STI)</strong>
-                        <div className="text-muted fs-11">Assinatura / Matrícula</div>
+                        <strong>Responsável TI</strong>
+                        <div className="text-muted fs-11">Superintendência de TI • Assinatura / Matrícula</div>
                       </div>
                     </div>
                     <div className="col-6">
                       <div className="border-top border-dark mx-4 pt-1">
-                        <strong>Recebido por (Unidade de Destino)</strong>
-                        <div className="text-muted fs-11">Nome Legível / Assinatura / Cargo</div>
+                        <strong>Responsável da Localidade</strong>
+                        <div className="text-muted fs-11">Nome Legível / Assinatura / Matrícula</div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="modal-footer bg-light py-2 px-3 d-flex justify-content-between">
+              <div className="modal-footer bg-light py-2 px-3 d-flex justify-content-between flex-wrap gap-2 d-print-none">
                 <button
                   type="button"
                   className="btn btn-outline-secondary btn-sm"
@@ -11042,13 +11265,32 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 >
                   Fechar
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm px-4 fw-bold"
-                  onClick={() => window.print()}
-                >
-                  <i className="ri-printer-line me-1"></i> Imprimir Termo
-                </button>
+                <div className="d-flex gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-soft-success btn-sm fw-bold"
+                    onClick={() => handleBaixarTermoCsv()}
+                    title="Baixar planilha CSV deste termo"
+                  >
+                    <i className="ri-file-excel-2-line me-1"></i> CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-soft-primary btn-sm fw-bold"
+                    onClick={() => handleBaixarTermoHtml()}
+                    title="Baixar documento HTML completo deste termo"
+                  >
+                    <i className="ri-download-2-line me-1"></i> Baixar HTML
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm px-3 fw-bold"
+                    onClick={() => window.print()}
+                    title="Imprimir ou Salvar como PDF"
+                  >
+                    <i className="ri-printer-line me-1"></i> Imprimir / PDF
+                  </button>
+                </div>
               </div>
             </div>
           </div>
