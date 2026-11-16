@@ -757,7 +757,7 @@ export default function App() {
           <div className="container-fluid">
             <div className="row">
               <div className="col-12">
-                <div className="page-title-box d-sm-flex align-items-center justify-content-between">
+                <div className="page-title-box d-none d-md-flex align-items-center justify-content-between">
                   <h4 className="mb-sm-0">
                     {activeTab === 'dashboard' && 'Dashboard Executivo — Dupla Conferência EMC'}
                     {activeTab === 'coletor' && 'Coletor Mobile — Leitor Óptico com Câmera (PWA)'}
@@ -9541,9 +9541,9 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   const [loteItens, setLoteItens] = useState([]); // itens no lote atual em montagem
   const [salvandoLote, setSalvandoLote] = useState(false);
   const [ultimoBipado, setUltimoBipado] = useState(null);
+  const [showConfigExtra, setShowConfigExtra] = useState(false);
 
   // REFS CRÍTICOS PARA ELIMINAR O BUG DE STALE CLOSURE NA CÂMERA AO VIVO
-  // Garantem que quando o usuário clicar em "MONITOR", o callback da câmera veja "MONITOR" no mesmo milissegundo!
   const tipoAtivoRef = useRef('CPU');
   const marcaModeloRef = useRef('Lenovo ThinkCentre M75q');
   const localidadeRef = useRef('');
@@ -9709,7 +9709,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     const curLoc = (localidadeRef.current || localidade || '').trim();
     if (!curLoc) {
       playBeep('error');
-      if (notify) notify('warning', 'Informe o Nome da Localidade de Destino antes de começar a bipar!');
+      if (notify) notify('warning', 'Informe a Localidade de Destino antes de começar a bipar!');
       return;
     }
 
@@ -9772,7 +9772,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     if (!decodedText || isProcessingRef.current) return;
     const now = Date.now();
 
-    // 1. Analisar código usando o parser municipal
     const parseResult = parseMunicipalBarcode(decodedText);
     if (!parseResult.valid) {
       return;
@@ -9785,7 +9784,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
       return;
     }
 
-    // 2. Filtro de Consenso Duplo (exige 2 frames idênticos em 500ms para evitar leitura borrada)
+    // 2. Filtro de Consenso Duplo (exige 2 frames idênticos em 500ms)
     const cand = candidateRef.current;
     if (cand.code === clean && (now - cand.time < 500)) {
       cand.count += 1;
@@ -9838,7 +9837,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
           fps: 15,
           qrbox: (viewfinderWidth, viewfinderHeight) => {
             const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const boxSize = Math.max(200, Math.min(Math.floor(minEdge * 0.82), 320));
+            const boxSize = Math.max(180, Math.min(Math.floor(minEdge * 0.8), 280));
             return { width: boxSize, height: boxSize };
           },
           aspectRatio: 1.0,
@@ -9882,8 +9881,8 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
         } catch (err2) {}
       }
     } catch (err) {
-      console.error('Erro ao ligar câmera no módulo novos:', err);
-      setCameraError('Permissão de câmera negada ou dispositivo indisponível. Você pode usar a entrada manual abaixo.');
+      console.error('Erro ao ligar câmera:', err);
+      setCameraError('Permissão de câmera negada ou dispositivo indisponível.');
       setIsScanning(false);
     }
   };
@@ -9930,7 +9929,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     }
   };
 
-  // Inicializar lista de câmeras disponíveis
+  // Inicializar lista de câmeras
   useEffect(() => {
     Html5Qrcode.getCameras()
       .then((devices) => {
@@ -9983,12 +9982,10 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     return { cpus, monitores, notebooks, total: loteItens.length };
   }, [loteItens]);
 
-  // Remover item individual do lote
   const handleRemoveItem = (id) => {
     setLoteItens((prev) => prev.filter((it) => it.id !== id));
   };
 
-  // Gravar lote completo no backend
   const handleGravarLote = async () => {
     const locDest = (localidadeRef.current || localidade || '').trim();
     if (!locDest) {
@@ -10026,7 +10023,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
 
       if (data.success) {
         if (notify) notify('success', data.message || 'Saída expedida com sucesso!');
-        // Abre o modal de termo com os itens gravados
         setTermoModalLote({
           lote_id: loteId,
           localidade: locDest,
@@ -10043,15 +10039,14 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
         if (notify) notify('danger', data.message || 'Erro ao gravar lote.');
       }
     } catch (e) {
-      if (notify) notify('danger', 'Falha de comunicação ao gravar lote.');
+      if (notify) notify('danger', 'Falha ao gravar lote.');
     } finally {
       setSalvandoLote(false);
     }
   };
 
-  // Excluir registro do histórico
   const handleExcluirExpedido = async (id, pat) => {
-    if (!window.confirm(`Tem certeza que deseja excluir o registro do patrimônio ${pat}?`)) return;
+    if (!window.confirm(`Tem certeza que deseja excluir o patrimônio ${pat}?`)) return;
     try {
       const res = await fetch(`/api/novos/${id}`, { method: 'DELETE' });
       const data = await res.json();
@@ -10067,7 +10062,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     }
   };
 
-  // Consultar conciliação da localidade
   const handleConsultarConciliacao = async (loc) => {
     const targetLoc = loc || concilLocalidade;
     if (!targetLoc) return;
@@ -10087,7 +10081,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     }
   };
 
-  // Exportar histórico para CSV
   const handleExportarHistorico = () => {
     if (expedidosList.length === 0) return;
     let csv = '\ufeffID;Lote;Localidade;Secretaria;Tipo;Patrimônio;Número de Série;Modelo;Origem Recurso;Data Expedição;Usuário;Origem Registro\r\n';
@@ -10104,7 +10097,6 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
     if (notify) notify('success', 'Planilha exportada com sucesso!');
   };
 
-  // Importar dados via texto JSON / CSV rápido
   const handleExecutarImportacao = async () => {
     let rows = [];
     try {
@@ -10133,7 +10125,7 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
         }
       }
     } catch (e) {
-      if (notify) notify('danger', 'Erro no formato dos dados de importação. Verifique o formato JSON ou CSV.');
+      if (notify) notify('danger', 'Erro no formato dos dados de importação.');
       return;
     }
 
@@ -10166,172 +10158,154 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
   };
 
   return (
-    <div className="d-flex flex-column gap-3 pb-4">
-      {/* 1. HERO HEADER BANNER (100% RESPONSIVO PARA CELULAR) */}
+    <div className="d-flex flex-column gap-2 pb-5">
+      {/* 1. HEADER COMPACTO COM ABAS INTEGRADAS (CAMERA-FIRST NO CELULAR) */}
       <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
-        <div className="card-body p-3">
-          <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+        <div className="card-body p-2 p-sm-3">
+          <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
             <div className="d-flex align-items-center gap-2">
               <div
-                className="rounded-3 d-flex align-items-center justify-content-center text-white flex-shrink-0 shadow-sm"
-                style={{ width: '38px', height: '38px', background: 'linear-gradient(135deg, #059669, #10b981)' }}
+                className="rounded-2 d-flex align-items-center justify-content-center text-white flex-shrink-0"
+                style={{ width: '32px', height: '32px', background: 'linear-gradient(135deg, #059669, #10b981)' }}
               >
-                <i className="ri-inbox-unarchive-line fs-20"></i>
+                <i className="ri-inbox-unarchive-line fs-18"></i>
               </div>
-              <div>
-                <h5 className="card-title mb-0 fs-15 fw-bold">
+              <div className="lh-1">
+                <span className="fs-14 fw-bold text-body d-block">
                   Expedição de Novos
-                </h5>
-                <span className="text-muted fs-11">
-                  Saída Galpão • Ativos PMAT / BNDES
+                </span>
+                <span className="text-muted fs-10 font-monospace">
+                  PMAT / BNDES
                 </span>
               </div>
             </div>
 
-            <span className="badge bg-soft-success text-success font-monospace fs-11 px-2 py-1">
-              Contagem • STI
-            </span>
+            {/* Mini contadores de status do galpão */}
+            <div className="d-flex align-items-center gap-1 font-monospace">
+              <span className="badge bg-soft-primary text-primary fs-11 px-2 py-1">
+                💻 {resumo?.kpis?.totalCpus || 0}
+              </span>
+              <span className="badge bg-soft-info text-info fs-11 px-2 py-1">
+                🖥️ {resumo?.kpis?.totalMonitores || 0}
+              </span>
+            </div>
           </div>
 
-          {/* 4 KPIs em Grid 2x2 no mobile, 4 colunas no desktop */}
-          <div className="row g-2 text-center">
-            <div className="col-6 col-sm-3">
-              <div className="p-2 rounded border bg-body-tertiary">
-                <span className="text-muted fs-10 text-uppercase fw-semibold d-block text-truncate">Total Saídas</span>
-                <h5 className="mb-0 fs-16 fw-bold font-monospace">
-                  {(resumo?.kpis?.totalExpedidos || 0).toLocaleString('pt-BR')}
-                </h5>
-              </div>
-            </div>
-            <div className="col-6 col-sm-3">
-              <div className="p-2 rounded border border-primary-subtle bg-soft-primary">
-                <span className="text-primary fs-10 text-uppercase fw-semibold d-block text-truncate">💻 CPUs</span>
-                <h5 className="mb-0 fs-16 fw-bold font-monospace text-primary">
-                  {(resumo?.kpis?.totalCpus || 0).toLocaleString('pt-BR')}
-                </h5>
-              </div>
-            </div>
-            <div className="col-6 col-sm-3">
-              <div className="p-2 rounded border border-info-subtle bg-soft-info">
-                <span className="text-info fs-10 text-uppercase fw-semibold d-block text-truncate">🖥️ Monitores</span>
-                <h5 className="mb-0 fs-16 fw-bold font-monospace text-info">
-                  {(resumo?.kpis?.totalMonitores || 0).toLocaleString('pt-BR')}
-                </h5>
-              </div>
-            </div>
-            <div className="col-6 col-sm-3">
-              <div className="p-2 rounded border border-success-subtle bg-soft-success">
-                <span className="text-success fs-10 text-uppercase fw-semibold d-block text-truncate">Locais</span>
-                <h5 className="mb-0 fs-16 fw-bold font-monospace text-success">
-                  {(resumo?.kpis?.totalLocalidades || 0).toLocaleString('pt-BR')}
-                </h5>
-              </div>
-            </div>
+          {/* 4 ABAS COMPACTAS QUE CABEM NA TELA SEM CORTAR */}
+          <div className="d-flex gap-1" role="tablist">
+            <button
+              type="button"
+              className={`btn btn-sm flex-fill fw-bold py-1 px-2 d-flex align-items-center justify-content-center gap-1 ${
+                activeSubTab === 'bipagem' ? 'btn-primary' : 'btn-soft-secondary'
+              }`}
+              style={{ borderRadius: '8px', fontSize: '12px' }}
+              onClick={() => setActiveSubTab('bipagem')}
+            >
+              <i className="ri-qr-scan-2-line"></i>
+              <span>Bipar</span>
+              {loteItens.length > 0 && (
+                <span className="badge bg-danger text-white rounded-pill font-monospace" style={{ fontSize: '9px' }}>
+                  {loteItens.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className={`btn btn-sm flex-fill fw-bold py-1 px-2 d-flex align-items-center justify-content-center gap-1 ${
+                activeSubTab === 'historico' ? 'btn-primary' : 'btn-soft-secondary'
+              }`}
+              style={{ borderRadius: '8px', fontSize: '12px' }}
+              onClick={() => { setActiveSubTab('historico'); fetchExpedidos(1); }}
+            >
+              <i className="ri-file-list-3-line"></i>
+              <span>Histórico</span>
+            </button>
+
+            <button
+              type="button"
+              className={`btn btn-sm flex-fill fw-bold py-1 px-2 d-flex align-items-center justify-content-center gap-1 ${
+                activeSubTab === 'conciliacao' ? 'btn-primary' : 'btn-soft-secondary'
+              }`}
+              style={{ borderRadius: '8px', fontSize: '12px' }}
+              onClick={() => setActiveSubTab('conciliacao')}
+            >
+              <i className="ri-scales-line"></i>
+              <span>Balanço</span>
+            </button>
+
+            <button
+              type="button"
+              className={`btn btn-sm flex-fill fw-bold py-1 px-2 d-flex align-items-center justify-content-center gap-1 ${
+                activeSubTab === 'importar' ? 'btn-primary' : 'btn-soft-secondary'
+              }`}
+              style={{ borderRadius: '8px', fontSize: '12px' }}
+              onClick={() => setActiveSubTab('importar')}
+            >
+              <i className="ri-upload-cloud-2-line"></i>
+              <span>Importar</span>
+            </button>
           </div>
         </div>
       </div>
 
-      {/* 2. SUB-ABAS DE NAVEGAÇÃO COM ROLAGEM HORIZONTAL NO MOBILE */}
-      <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
-        <div className="card-header border-bottom p-2 p-sm-3">
-          <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
-            <ul className="nav nav-pills card-header-pills flex-nowrap text-nowrap gap-1">
-              <li className="nav-item">
-                <button
-                  type="button"
-                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'bipagem' ? 'active' : ''}`}
-                  onClick={() => setActiveSubTab('bipagem')}
-                >
-                  <i className="ri-qr-scan-2-line me-1"></i> Bipar Saída
-                  {loteItens.length > 0 && (
-                    <span className="badge bg-danger text-white ms-1 rounded-pill font-monospace">
-                      {loteItens.length}
-                    </span>
-                  )}
-                </button>
-              </li>
-              <li className="nav-item">
-                <button
-                  type="button"
-                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'historico' ? 'active' : ''}`}
-                  onClick={() => { setActiveSubTab('historico'); fetchExpedidos(1); }}
-                >
-                  <i className="ri-file-list-3-line me-1"></i> Histórico
-                </button>
-              </li>
-              <li className="nav-item">
-                <button
-                  type="button"
-                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'conciliacao' ? 'active' : ''}`}
-                  onClick={() => setActiveSubTab('conciliacao')}
-                >
-                  <i className="ri-arrow-left-right-line me-1"></i> Balanço Novo x EMC
-                </button>
-              </li>
-              <li className="nav-item">
-                <button
-                  type="button"
-                  className={`nav-link fs-12 fw-bold px-3 py-2 ${activeSubTab === 'importar' ? 'active' : ''}`}
-                  onClick={() => setActiveSubTab('importar')}
-                >
-                  <i className="ri-upload-cloud-2-line me-1"></i> Importar
-                </button>
-              </li>
-            </ul>
-          </div>
-        </div>
+      {/* ========================================================= */}
+      {/* ABA 1: BIPAGEM DIRETA (CAMERA-FIRST - ENTRA DIRETAMENTE NO FOCO) */}
+      {/* ========================================================= */}
+      {activeSubTab === 'bipagem' && (
+        <div className="d-flex flex-column gap-2">
+          {/* BLOCO COMPACTO 1: LOCALIDADE & TIPO DE ATIVO */}
+          <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+            <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
+              {/* Campo de Localidade */}
+              <div>
+                <div className="d-flex align-items-center justify-content-between mb-1">
+                  <label className="form-label fs-11 fw-bold text-muted text-uppercase mb-0">
+                    <i className="ri-map-pin-2-fill text-danger me-1"></i>
+                    Localidade de Destino:
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-link btn-sm p-0 fs-11 text-decoration-none text-muted"
+                    onClick={() => setShowConfigExtra(!showConfigExtra)}
+                  >
+                    {showConfigExtra ? '− Menos opções' : '+ Mais opções'}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  className="form-control form-control-md fs-14 fw-semibold"
+                  placeholder="Ex: CRAS Industrial, SEDE, Escola..."
+                  value={localidade}
+                  onChange={(e) => handleLocalidadeChange(e.target.value)}
+                  list="localidades-datalist-novos"
+                  autoComplete="off"
+                />
+                <datalist id="localidades-datalist-novos">
+                  {(resumo?.localidadesDisponiveis || []).map((loc) => (
+                    <option key={loc} value={loc} />
+                  ))}
+                </datalist>
+              </div>
 
-        {/* 3. CONTEÚDO DA SUB-ABA ATIVA */}
-        <div className="card-body p-2 p-sm-3 p-md-4">
-          {/* ========================================================= */}
-          {/* ABA 1: BIPAGEM CONTÍNUA COM CÂMERA AO VIVO */}
-          {/* ========================================================= */}
-          {activeSubTab === 'bipagem' && (
-            <div className="d-flex flex-column gap-3">
-              {/* Seção 1: Destino e Configuração do Lote */}
-              <div className="p-3 rounded border bg-body-tertiary">
-                <div className="row g-2 align-items-center">
-                  <div className="col-12 col-md-6">
-                    <label className="form-label fs-12 fw-bold mb-1">
-                      <i className="ri-map-pin-2-fill text-danger me-1"></i>
-                      Localidade de Destino:
-                    </label>
+              {/* Opções extras colapsáveis para não ocupar espaço no celular */}
+              {showConfigExtra && (
+                <div className="row g-2 pt-1 border-top">
+                  <div className="col-6">
+                    <label className="form-label fs-10 text-muted fw-bold mb-0">Secretaria:</label>
                     <input
                       type="text"
-                      className="form-control form-control-md fs-14 fw-semibold"
-                      placeholder="Ex: CRAS Industrial, SEDE, E.M. Heitor Villa Lobos..."
-                      value={localidade}
-                      onChange={(e) => handleLocalidadeChange(e.target.value)}
-                      list="localidades-datalist-novos"
-                      autoComplete="off"
-                    />
-                    <datalist id="localidades-datalist-novos">
-                      {(resumo?.localidadesDisponiveis || []).map((loc) => (
-                        <option key={loc} value={loc} />
-                      ))}
-                    </datalist>
-                  </div>
-
-                  <div className="col-6 col-md-3">
-                    <label className="form-label fs-12 fw-bold mb-1">
-                      Secretaria:
-                    </label>
-                    <input
-                      type="text"
-                      className="form-control form-control-md fs-13"
-                      placeholder="Ex: SMDS, SEAD..."
+                      className="form-control form-control-sm fs-12"
+                      placeholder="Ex: SMDS, SEAD"
                       value={secretaria}
                       onChange={(e) => setSecretaria(e.target.value)}
                     />
                   </div>
-
-                  <div className="col-6 col-md-3">
-                    <label className="form-label fs-12 fw-bold mb-1">
-                      Modelo Padrão:
-                    </label>
+                  <div className="col-6">
+                    <label className="form-label fs-10 text-muted fw-bold mb-0">Modelo Padrão:</label>
                     <input
                       type="text"
-                      className="form-control form-control-md fs-13"
+                      className="form-control form-control-sm fs-12"
                       value={marcaModelo}
                       onChange={(e) => {
                         setMarcaModelo(e.target.value);
@@ -10340,458 +10314,396 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                     />
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Seção 2: Seletor Rápido de Tipo em 3 Botões Touch Grandes (Mobile First) */}
-              <div className="d-flex flex-column gap-1">
-                <div className="d-flex align-items-center justify-content-between px-1">
-                  <span className="fs-11 fw-bold text-muted text-uppercase">
-                    Selecione o que vai bipar agora:
-                  </span>
-                  <span className="badge bg-primary text-white font-monospace fs-11">
-                    Selecionado: {tipoAtivo}
-                  </span>
-                </div>
-
-                <div className="row g-2">
-                  <div className="col-4">
-                    <button
-                      type="button"
-                      className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center gap-1 transition-all ${
-                        tipoAtivo === 'CPU'
-                          ? 'btn-primary shadow-sm fw-bold border-2'
-                          : 'btn-outline-primary'
-                      }`}
-                      style={{ minHeight: '52px', borderRadius: '10px' }}
-                      onClick={() => handleSelectTipo('CPU')}
-                    >
-                      <span className="fs-13 fw-bold text-truncate">💻 CPU</span>
-                      <span className={`badge rounded-pill font-monospace ${
-                        tipoAtivo === 'CPU' ? 'bg-white text-primary' : 'bg-primary text-white'
-                      }`} style={{ fontSize: '10px' }}>
-                        {loteStats.cpus} lidos
-                      </span>
-                    </button>
-                  </div>
-
-                  <div className="col-4">
-                    <button
-                      type="button"
-                      className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center gap-1 transition-all ${
-                        tipoAtivo === 'MONITOR'
-                          ? 'btn-info text-white shadow-sm fw-bold border-2'
-                          : 'btn-outline-info'
-                      }`}
-                      style={{ minHeight: '52px', borderRadius: '10px' }}
-                      onClick={() => handleSelectTipo('MONITOR')}
-                    >
-                      <span className="fs-13 fw-bold text-truncate">🖥️ Monitor</span>
-                      <span className={`badge rounded-pill font-monospace ${
-                        tipoAtivo === 'MONITOR' ? 'bg-white text-info' : 'bg-info text-white'
-                      }`} style={{ fontSize: '10px' }}>
-                        {loteStats.monitores} lidos
-                      </span>
-                    </button>
-                  </div>
-
-                  <div className="col-4">
-                    <button
-                      type="button"
-                      className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center gap-1 transition-all ${
-                        tipoAtivo === 'NOTEBOOK'
-                          ? 'btn-warning text-dark shadow-sm fw-bold border-2'
-                          : 'btn-outline-warning'
-                      }`}
-                      style={{ minHeight: '52px', borderRadius: '10px' }}
-                      onClick={() => handleSelectTipo('NOTEBOOK')}
-                    >
-                      <span className="fs-13 fw-bold text-truncate">💼 Note</span>
-                      <span className={`badge rounded-pill font-monospace ${
-                        tipoAtivo === 'NOTEBOOK' ? 'bg-dark text-white' : 'bg-warning text-dark'
-                      }`} style={{ fontSize: '10px' }}>
-                        {loteStats.notebooks} lidos
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Seção 3: Leitor Óptico com CÂMERA AO VIVO (IGUAL AO COLETOR EMC) */}
-              <div className="card border shadow-sm mb-0 overflow-hidden" style={{ borderRadius: '12px' }}>
-                <div className="card-header bg-dark text-white d-flex align-items-center justify-content-between py-2 px-3 flex-wrap gap-2">
-                  <div className="d-flex align-items-center gap-2">
-                    <span className={`badge ${isScanning ? 'bg-success' : 'bg-secondary'} rounded-pill font-monospace fs-11`}>
-                      {isScanning ? '● CÂMERA LIGADA' : '○ CÂMERA PAUSADA'}
-                    </span>
-                    <span className="badge bg-primary rounded-pill font-monospace fs-11">
-                      {tipoAtivo}
-                    </span>
-                  </div>
-
-                  <div className="d-flex align-items-center gap-1">
-                    {/* Hardware Zoom */}
-                    {hasZoom && isScanning && (
-                      <div className="btn-group btn-group-sm me-1" role="group">
-                        {[1, 2].filter(z => z <= (zoomMinMax.max || 3)).map((z) => (
-                          <button
-                            key={z}
-                            type="button"
-                            className={`btn btn-xs ${zoomLevel === z ? 'btn-primary fw-bold' : 'btn-outline-light'}`}
-                            onClick={() => handleZoomChange(z)}
-                            title={`Zoom ${z}x`}
-                          >
-                            {z}x
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Lanterna / Flash */}
-                    {hasTorch && isScanning && (
-                      <button
-                        type="button"
-                        className={`btn btn-sm btn-icon ${torchOn ? 'btn-warning' : 'btn-outline-light'}`}
-                        onClick={toggleTorch}
-                        title="Alternar Lanterna / Flash"
-                      >
-                        <i className="ri-flashlight-line fs-14"></i>
-                      </button>
-                    )}
-
-                    {/* Botão Ligar/Desligar Câmera */}
-                    {isScanning ? (
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-danger px-3 py-1 d-flex align-items-center gap-1 fw-bold shadow-sm"
-                        onClick={stopCamera}
-                      >
-                        <i className="ri-stop-circle-line"></i> Pausar
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-success px-3 py-1 d-flex align-items-center gap-1 fw-bold shadow-sm"
-                        onClick={() => startCamera(selectedCameraId)}
-                      >
-                        <i className="ri-camera-lens-line"></i> Iniciar Câmera
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div
-                  className="card-body p-0 bg-dark text-center position-relative overflow-hidden"
-                  style={{
-                    minHeight: '280px',
-                    transition: 'box-shadow 0.15s ease',
-                    boxShadow: flashFeedback === 'success'
-                      ? 'inset 0 0 0 10px #0ab39c, 0 0 40px #0ab39c'
-                      : flashFeedback === 'duplicate'
-                      ? 'inset 0 0 0 12px #ff9800, 0 0 45px #ff9800'
-                      : 'none'
-                  }}
-                >
-                  {/* Container do Scanner da Câmera */}
-                  <div
-                    id="camera-reader-novos"
-                    style={{ width: '100%', minHeight: '280px', background: '#000' }}
-                  ></div>
-
-                  {/* Contador Flutuante no Topo do Viewfinder com Tipo Ativo em Destaque */}
-                  <div
-                    className="position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill bg-dark bg-opacity-75 text-white fs-12 fw-bold shadow-sm d-flex align-items-center gap-2"
-                    style={{ zIndex: 6, backdropFilter: 'blur(6px)', border: '1px solid rgba(255,255,255,0.2)' }}
+              {/* 3 BOTÕES LARGOS DE SELEÇÃO RÁPIDA DE TIPO (TOUCH ERGONÔMICO) */}
+              <div className="row g-2 pt-1">
+                <div className="col-4">
+                  <button
+                    type="button"
+                    className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center transition-all ${
+                      tipoAtivo === 'CPU'
+                        ? 'btn-primary shadow-sm fw-bold border-2'
+                        : 'btn-outline-primary'
+                    }`}
+                    style={{ minHeight: '48px', borderRadius: '8px' }}
+                    onClick={() => handleSelectTipo('CPU')}
                   >
-                    <span className="badge bg-success font-monospace">{loteItens.length} no lote</span>
-                    <span className="text-warning font-monospace">Bipando: {tipoAtivo}</span>
-                  </div>
-
-                  {/* Mira Óptica com Retículo de 4 Cantos e Guias Horizontal + Vertical */}
-                  {isScanning && (
-                    <div
-                      className="position-absolute top-50 start-50 translate-middle pointer-events-none"
-                      style={{
-                        width: 'min(240px, 75vw)',
-                        height: 'min(240px, 75vw)',
-                        border: '1.5px dashed rgba(255, 255, 255, 0.45)',
-                        borderRadius: '16px',
-                        zIndex: 4,
-                        boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.42)'
-                      }}
-                    >
-                      {/* Cantos Verdes de Enquadramento */}
-                      <div style={{ position: 'absolute', top: '-2px', left: '-2px', width: '22px', height: '22px', borderTop: '4px solid #10b981', borderLeft: '4px solid #10b981', borderTopLeftRadius: '14px' }}></div>
-                      <div style={{ position: 'absolute', top: '-2px', right: '-2px', width: '22px', height: '22px', borderTop: '4px solid #10b981', borderRight: '4px solid #10b981', borderTopRightRadius: '14px' }}></div>
-                      <div style={{ position: 'absolute', bottom: '-2px', left: '-2px', width: '22px', height: '22px', borderBottom: '4px solid #10b981', borderLeft: '4px solid #10b981', borderBottomLeftRadius: '14px' }}></div>
-                      <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', width: '22px', height: '22px', borderBottom: '4px solid #10b981', borderRight: '4px solid #10b981', borderBottomRightRadius: '14px' }}></div>
-
-                      {/* Guia Laser Vermelho Central */}
-                      <div style={{ position: 'absolute', top: '50%', left: '8px', right: '8px', height: '2px', background: 'rgba(239, 68, 68, 0.9)', boxShadow: '0 0 8px #ef4444' }}></div>
-
-                      {/* Legenda de Orientação */}
-                      <span
-                        style={{
-                          position: 'absolute',
-                          top: '-24px',
-                          left: '50%',
-                          transform: 'translateX(-50%)',
-                          fontSize: '11px',
-                          color: '#34d399',
-                          fontWeight: 700,
-                          letterSpacing: '0.5px',
-                          whiteSpace: 'nowrap',
-                          textShadow: '0 1px 3px rgba(0,0,0,0.95)'
-                        }}
-                      >
-                        FOQUE NO PATRIMÔNIO OU SERIAL
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Banner Flutuante de Feedback Imediato */}
-                  {flashFeedback && (
-                    <div
-                      className={`position-absolute top-0 start-0 end-0 p-3 text-white fw-bold text-center fs-15 shadow ${
-                        flashFeedback === 'success'
-                          ? 'bg-success'
-                          : flashFeedback === 'duplicate'
-                          ? 'bg-warning text-dark border-bottom border-dark'
-                          : 'bg-danger'
-                      }`}
-                      style={{ zIndex: 10 }}
-                    >
-                      <i className={`ri-${flashFeedback === 'success' ? 'checkbox-circle-fill' : 'lock-2-fill'} me-2 fs-18`}></i>
-                      {flashFeedback === 'duplicate'
-                        ? `⚠️ ATENÇÃO: Equipamento ${lastScannedCodeRef.current} já está no lote!`
-                        : ultimoBipado
-                        ? `✓ ${ultimoBipado.patrimonio} (${ultimoBipado.tipo}) Adicionado!`
-                        : '✓ EQUIPAMENTO ADICIONADO!'}
-                    </div>
-                  )}
-
-                  {/* Estado Ocioso: Botão de Ativar Leitor */}
-                  {!isScanning && (
-                    <div
-                      className="position-absolute top-50 start-50 translate-middle text-center w-100 p-3"
-                      style={{ zIndex: 5 }}
-                    >
-                      <div className="avatar-md rounded-circle bg-soft-success mx-auto d-flex align-items-center justify-content-center text-success fs-28 mb-2">
-                        <i className="ri-qr-scan-2-line"></i>
-                      </div>
-                      <h6 className="text-white fs-15 mb-1">Câmera Pronta</h6>
-                      <p className="text-light opacity-75 fs-12 mb-3" style={{ maxWidth: '340px', margin: '0 auto' }}>
-                        Toque abaixo para ligar a câmera do celular. Aponte para a etiqueta de patrimônio ou serial.
-                      </p>
-                      <button
-                        type="button"
-                        className="btn btn-success btn-md rounded-pill px-4 shadow"
-                        onClick={() => startCamera(selectedCameraId)}
-                      >
-                        <i className="ri-camera-fill me-1"></i> Ativar Leitor Óptico
-                      </button>
-                    </div>
-                  )}
-
-                  {cameraError && (
-                    <div className="alert alert-warning m-2 text-start fs-12" role="alert">
-                      <i className="ri-error-warning-line me-1"></i> {cameraError}
-                    </div>
-                  )}
-                </div>
-
-                {/* Seletor de Câmera quando houver mais de uma */}
-                {availableCameras.length > 1 && (
-                  <div className="p-2 border-top bg-body-tertiary d-flex align-items-center justify-content-between">
-                    <span className="fs-11 text-muted fw-semibold">Dispositivo de Câmera:</span>
-                    <select
-                      className="form-select form-select-sm"
-                      style={{ maxWidth: '220px' }}
-                      value={selectedCameraId}
-                      onChange={(e) => {
-                        setSelectedCameraId(e.target.value);
-                        if (isScanning) {
-                          stopCamera().then(() => startCamera(e.target.value));
-                        }
-                      }}
-                    >
-                      {availableCameras.map((cam) => (
-                        <option key={cam.id} value={cam.id}>
-                          {cam.label || `Câmera ${cam.id.substring(0, 5)}`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {/* Alerta de Duplicidade */}
-                {duplicateAlert && (
-                  <div className="alert alert-warning border border-warning shadow-sm mx-2 mt-2 mb-0 p-2 d-flex align-items-center justify-content-between">
-                    <div className="d-flex align-items-center gap-2">
-                      <i className="ri-lock-2-line fs-16 text-warning"></i>
-                      <span className="fs-12 fw-bold">{duplicateAlert.message}</span>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-link p-0 text-decoration-none"
-                      onClick={() => setDuplicateAlert(null)}
-                    >
-                      <i className="ri-close-line fs-16"></i>
-                    </button>
-                  </div>
-                )}
-
-                {/* Entrada Manual de Apoio (Para Digitação ou Leitor USB) */}
-                <div className="p-2 p-sm-3 border-top bg-body-tertiary">
-                  <form onSubmit={handleBiparManual}>
-                    <div className="input-group input-group-md">
-                      <span className="input-group-text bg-body text-muted">
-                        <i className="ri-keyboard-line fs-16"></i>
-                      </span>
-                      <input
-                        ref={inputRef}
-                        type="text"
-                        className="form-control font-monospace fw-bold fs-14"
-                        placeholder={`Digite o patrimônio do ${tipoAtivo} (ex: 100039491)...`}
-                        value={barcodeInput}
-                        onChange={(e) => setBarcodeInput(e.target.value)}
-                      />
-                      <button type="submit" className="btn btn-primary fw-semibold px-3">
-                        <i className="ri-add-line me-1"></i> Bipar
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-
-              {/* Seção 4: Tabela de Itens do Lote em Montagem */}
-              <div className="card shadow-xs border mb-0" style={{ borderRadius: '12px' }}>
-                <div className="card-header border-bottom p-2 p-sm-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
-                  <div className="d-flex align-items-center gap-2">
-                    <i className="ri-stack-line text-success fs-18"></i>
-                    <h6 className="card-title mb-0 fs-14 fw-bold">
-                      Lote Atual ({loteStats.total})
-                    </h6>
-                    <span className="badge bg-soft-primary text-primary fs-11">
-                      {loteStats.cpus} CPUs
+                    <span className="fs-12 fw-bold">💻 CPU</span>
+                    <span className={`badge rounded-pill font-monospace mt-1 ${
+                      tipoAtivo === 'CPU' ? 'bg-white text-primary' : 'bg-primary text-white'
+                    }`} style={{ fontSize: '10px' }}>
+                      {loteStats.cpus} lidos
                     </span>
-                    <span className="badge bg-soft-info text-info fs-11">
-                      {loteStats.monitores} Monitores
-                    </span>
-                  </div>
-
-                  <div className="d-flex align-items-center gap-2">
-                    {loteItens.length > 0 && (
-                      <button
-                        type="button"
-                        className="btn btn-soft-danger btn-sm px-2 py-1 fs-11"
-                        onClick={() => {
-                          if (window.confirm('Deseja limpar todos os itens deste lote não salvo?')) setLoteItens([]);
-                        }}
-                      >
-                        <i className="ri-delete-bin-line me-1"></i> Limpar
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      className="btn btn-success btn-sm px-3 py-1 fs-12 fw-bold shadow-xs d-flex align-items-center gap-1"
-                      onClick={handleGravarLote}
-                      disabled={salvandoLote || loteItens.length === 0}
-                    >
-                      <i className="ri-save-3-line"></i>
-                      {salvandoLote ? 'Gravando...' : `Gravar Saída (${loteItens.length})`}
-                    </button>
-                  </div>
+                  </button>
                 </div>
 
-                <div className="card-body p-0">
-                  {loteItens.length === 0 ? (
-                    <div className="text-center py-4 text-muted">
-                      <i className="ri-inbox-line fs-32 d-block mb-1 text-secondary opacity-50"></i>
-                      <p className="fs-13 mb-0 fw-semibold">Nenhum equipamento adicionado ainda.</p>
-                      <span className="fs-11 text-muted">Preencha o destino, selecione o tipo e aponte a câmera para os equipamentos.</span>
-                    </div>
-                  ) : (
-                    <div className="table-responsive" style={{ maxHeight: '340px', overflowY: 'auto' }}>
-                      <table className="table table-sm table-hover table-striped align-middle mb-0 fs-12">
-                        <thead className="table-light sticky-top">
-                          <tr>
-                            <th style={{ width: '35px' }}>#</th>
-                            <th style={{ width: '80px' }}>Tipo</th>
-                            <th>Patrimônio</th>
-                            <th>Série</th>
-                            <th>Hora</th>
-                            <th className="text-center" style={{ width: '50px' }}>Ação</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {loteItens.map((it, idx) => (
-                            <tr key={it.id}>
-                              <td className="text-muted font-monospace">{loteItens.length - idx}</td>
-                              <td>
-                                <span className={`badge font-monospace ${
-                                  it.tipo === 'CPU' ? 'bg-soft-primary text-primary' : it.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
-                                } border`}>
-                                  {it.tipo}
-                                </span>
-                              </td>
-                              <td>
-                                <span className="font-monospace fw-bold fs-13">{it.patrimonio}</span>
-                                {it.tipoEtiqueta && (
-                                  <span className="d-block text-muted fs-10">{it.tipoEtiqueta}</span>
-                                )}
-                              </td>
-                              <td className="font-monospace text-muted">{it.numero_serie || '-'}</td>
-                              <td className="text-muted font-monospace fs-11">{it.hora}</td>
-                              <td className="text-center">
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost-danger btn-sm p-1"
-                                  onClick={() => handleRemoveItem(it.id)}
-                                  title="Remover deste lote"
-                                >
-                                  <i className="ri-delete-bin-line fs-14"></i>
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                <div className="col-4">
+                  <button
+                    type="button"
+                    className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center transition-all ${
+                      tipoAtivo === 'MONITOR'
+                        ? 'btn-info text-white shadow-sm fw-bold border-2'
+                        : 'btn-outline-info'
+                    }`}
+                    style={{ minHeight: '48px', borderRadius: '8px' }}
+                    onClick={() => handleSelectTipo('MONITOR')}
+                  >
+                    <span className="fs-12 fw-bold">🖥️ Monitor</span>
+                    <span className={`badge rounded-pill font-monospace mt-1 ${
+                      tipoAtivo === 'MONITOR' ? 'bg-white text-info' : 'bg-info text-white'
+                    }`} style={{ fontSize: '10px' }}>
+                      {loteStats.monitores} lidos
+                    </span>
+                  </button>
+                </div>
+
+                <div className="col-4">
+                  <button
+                    type="button"
+                    className={`btn w-100 py-2 d-flex flex-column align-items-center justify-content-center transition-all ${
+                      tipoAtivo === 'NOTEBOOK'
+                        ? 'btn-warning text-dark shadow-sm fw-bold border-2'
+                        : 'btn-outline-warning'
+                    }`}
+                    style={{ minHeight: '48px', borderRadius: '8px' }}
+                    onClick={() => handleSelectTipo('NOTEBOOK')}
+                  >
+                    <span className="fs-12 fw-bold">💼 Note</span>
+                    <span className={`badge rounded-pill font-monospace mt-1 ${
+                      tipoAtivo === 'NOTEBOOK' ? 'bg-dark text-white' : 'bg-warning text-dark'
+                    }`} style={{ fontSize: '10px' }}>
+                      {loteStats.notebooks} lidos
+                    </span>
+                  </button>
                 </div>
               </div>
             </div>
-          )}
+          </div>
 
-          {/* ========================================================= */}
-          {/* ABA 2: HISTÓRICO DE SAÍDAS / EXPEDIÇÕES */}
-          {/* ========================================================= */}
-          {activeSubTab === 'historico' && (
-            <div className="d-flex flex-column gap-3">
-              {/* Barra de Filtros */}
-              <div className="row g-2 align-items-center">
-                <div className="col-12 col-md-5">
-                  <div className="position-relative">
-                    <input
-                      type="text"
-                      className="form-control form-control-sm pe-4"
-                      placeholder="Buscar patrimônio, serial, localidade..."
-                      value={historicoSearch}
-                      onChange={(e) => setHistoricoSearch(e.target.value)}
-                    />
-                    {historicoSearch && (
-                      <button
-                        type="button"
-                        className="btn btn-link position-absolute end-0 top-50 translate-middle-y text-muted p-0 me-2"
-                        onClick={() => setHistoricoSearch('')}
-                      >
-                        <i className="ri-close-line"></i>
-                      </button>
-                    )}
+          {/* BLOCO 2: VISOR DA CÂMERA AO VIVO COM FOCO DIRETO */}
+          <div className="card border shadow-sm mb-0 overflow-hidden" style={{ borderRadius: '12px' }}>
+            <div className="card-header bg-dark text-white d-flex align-items-center justify-content-between py-2 px-3">
+              <div className="d-flex align-items-center gap-2">
+                <span className={`badge ${isScanning ? 'bg-success' : 'bg-secondary'} rounded-pill font-monospace fs-10`}>
+                  {isScanning ? '● AO VIVO' : '○ PAUSADA'}
+                </span>
+                <span className="badge bg-primary rounded-pill font-monospace fs-10">
+                  {tipoAtivo}
+                </span>
+              </div>
+
+              <div className="d-flex align-items-center gap-1">
+                {/* Lanterna / Flash */}
+                {hasTorch && isScanning && (
+                  <button
+                    type="button"
+                    className={`btn btn-sm btn-icon ${torchOn ? 'btn-warning' : 'btn-outline-light'}`}
+                    onClick={toggleTorch}
+                    title="Lanterna"
+                    style={{ width: '28px', height: '28px', padding: 0 }}
+                  >
+                    <i className="ri-flashlight-line fs-14"></i>
+                  </button>
+                )}
+
+                {/* Zoom */}
+                {hasZoom && isScanning && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline-light py-0 px-2 fs-11"
+                    onClick={() => handleZoomChange(zoomLevel === 1 ? 2 : 1)}
+                    style={{ height: '28px' }}
+                  >
+                    {zoomLevel}x
+                  </button>
+                )}
+
+                {/* Botão Câmera */}
+                {isScanning ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger px-2 py-0 fw-bold fs-11 d-flex align-items-center gap-1"
+                    style={{ height: '28px' }}
+                    onClick={stopCamera}
+                  >
+                    <i className="ri-stop-circle-line"></i> Pausar
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-success px-3 py-0 fw-bold fs-11 d-flex align-items-center gap-1"
+                    style={{ height: '28px' }}
+                    onClick={() => startCamera(selectedCameraId)}
+                  >
+                    <i className="ri-camera-lens-line"></i> Iniciar Câmera
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div
+              className="card-body p-0 bg-dark text-center position-relative overflow-hidden"
+              style={{
+                minHeight: '260px',
+                maxHeight: '300px',
+                transition: 'box-shadow 0.15s ease',
+                boxShadow: flashFeedback === 'success'
+                  ? 'inset 0 0 0 10px #0ab39c, 0 0 40px #0ab39c'
+                  : flashFeedback === 'duplicate'
+                  ? 'inset 0 0 0 12px #ff9800, 0 0 45px #ff9800'
+                  : 'none'
+              }}
+            >
+              {/* Container do Scanner */}
+              <div
+                id="camera-reader-novos"
+                style={{ width: '100%', minHeight: '260px', maxHeight: '300px', background: '#000' }}
+              ></div>
+
+              {/* Indicador Flutuante no Topo do Visor */}
+              <div
+                className="position-absolute top-0 start-50 translate-middle-x mt-2 px-3 py-1 rounded-pill bg-dark bg-opacity-75 text-white fs-11 fw-bold shadow-sm d-flex align-items-center gap-2"
+                style={{ zIndex: 6, backdropFilter: 'blur(6px)', border: '1px solid rgba(255,255,255,0.2)' }}
+              >
+                <span className="badge bg-success font-monospace">{loteItens.length} no lote</span>
+                <span className="text-warning font-monospace">Bipando: {tipoAtivo}</span>
+              </div>
+
+              {/* Mira Óptica com Retículo de 4 Cantos e Guias */}
+              {isScanning && (
+                <div
+                  className="position-absolute top-50 start-50 translate-middle pointer-events-none"
+                  style={{
+                    width: 'min(220px, 70vw)',
+                    height: 'min(220px, 70vw)',
+                    border: '1.5px dashed rgba(255, 255, 255, 0.45)',
+                    borderRadius: '14px',
+                    zIndex: 4,
+                    boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.45)'
+                  }}
+                >
+                  <div style={{ position: 'absolute', top: '-2px', left: '-2px', width: '20px', height: '20px', borderTop: '4px solid #10b981', borderLeft: '4px solid #10b981', borderTopLeftRadius: '12px' }}></div>
+                  <div style={{ position: 'absolute', top: '-2px', right: '-2px', width: '20px', height: '20px', borderTop: '4px solid #10b981', borderRight: '4px solid #10b981', borderTopRightRadius: '12px' }}></div>
+                  <div style={{ position: 'absolute', bottom: '-2px', left: '-2px', width: '20px', height: '20px', borderBottom: '4px solid #10b981', borderLeft: '4px solid #10b981', borderBottomLeftRadius: '12px' }}></div>
+                  <div style={{ position: 'absolute', bottom: '-2px', right: '-2px', width: '20px', height: '20px', borderBottom: '4px solid #10b981', borderRight: '4px solid #10b981', borderBottomRightRadius: '12px' }}></div>
+                  <div style={{ position: 'absolute', top: '50%', left: '6px', right: '6px', height: '2px', background: 'rgba(239, 68, 68, 0.9)', boxShadow: '0 0 8px #ef4444' }}></div>
+
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: '-22px',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      fontSize: '10px',
+                      color: '#34d399',
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.95)'
+                    }}
+                  >
+                    FOQUE NO PATRIMÔNIO
+                  </span>
+                </div>
+              )}
+
+              {/* Feedback Flash */}
+              {flashFeedback && (
+                <div
+                  className={`position-absolute top-0 start-0 end-0 p-2 text-white fw-bold text-center fs-14 shadow ${
+                    flashFeedback === 'success'
+                      ? 'bg-success'
+                      : flashFeedback === 'duplicate'
+                      ? 'bg-warning text-dark border-bottom border-dark'
+                      : 'bg-danger'
+                  }`}
+                  style={{ zIndex: 10 }}
+                >
+                  {flashFeedback === 'duplicate'
+                    ? `⚠️ ATENÇÃO: ${lastScannedCodeRef.current} já foi lido!`
+                    : ultimoBipado
+                    ? `✓ ${ultimoBipado.patrimonio} (${ultimoBipado.tipo}) Adicionado!`
+                    : '✓ EQUIPAMENTO ADICIONADO!'}
+                </div>
+              )}
+
+              {/* Estado Ocioso */}
+              {!isScanning && (
+                <div
+                  className="position-absolute top-50 start-50 translate-middle text-center w-100 p-3"
+                  style={{ zIndex: 5 }}
+                >
+                  <div className="avatar-sm rounded-circle bg-soft-success mx-auto d-flex align-items-center justify-content-center text-success fs-22 mb-2">
+                    <i className="ri-qr-scan-2-line"></i>
                   </div>
+                  <h6 className="text-white fs-14 mb-1">Câmera Pronta</h6>
+                  <p className="text-light opacity-75 fs-11 mb-2">
+                    Toque abaixo para ativar a câmera e apontar para as máquinas.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-success btn-sm rounded-pill px-3 shadow"
+                    onClick={() => startCamera(selectedCameraId)}
+                  >
+                    <i className="ri-camera-fill me-1"></i> Ativar Câmera
+                  </button>
+                </div>
+              )}
+
+              {cameraError && (
+                <div className="alert alert-warning m-2 text-start fs-11 p-2" role="alert">
+                  <i className="ri-error-warning-line me-1"></i> {cameraError}
+                </div>
+              )}
+            </div>
+
+            {/* Alerta de Duplicidade */}
+            {duplicateAlert && (
+              <div className="alert alert-warning border border-warning shadow-sm mx-2 mt-2 mb-0 p-2 d-flex align-items-center justify-content-between">
+                <div className="d-flex align-items-center gap-1">
+                  <i className="ri-lock-2-line fs-14 text-warning"></i>
+                  <span className="fs-11 fw-bold">{duplicateAlert.message}</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-link p-0 text-decoration-none"
+                  onClick={() => setDuplicateAlert(null)}
+                >
+                  <i className="ri-close-line fs-14"></i>
+                </button>
+              </div>
+            )}
+
+            {/* Entrada Manual Compacta */}
+            <div className="p-2 border-top bg-body-tertiary">
+              <form onSubmit={handleBiparManual}>
+                <div className="input-group input-group-sm">
+                  <span className="input-group-text bg-body text-muted">
+                    <i className="ri-keyboard-line fs-14"></i>
+                  </span>
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    className="form-control font-monospace fw-bold fs-13"
+                    placeholder={`Digitar patrimônio do ${tipoAtivo}...`}
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                  />
+                  <button type="submit" className="btn btn-primary fw-semibold px-3">
+                    Adicionar
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          {/* BLOCO 3: RESUMO DO LOTE & FINALIZAÇÃO (DESTAQUE GRANDE) */}
+          <div className="card shadow-xs border mb-0" style={{ borderRadius: '12px' }}>
+            <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
+              <div className="d-flex align-items-center justify-content-between">
+                <div>
+                  <span className="fs-13 fw-bold text-body d-block">
+                    Lote Atual: {loteStats.total} {loteStats.total === 1 ? 'item' : 'itens'}
+                  </span>
+                  <span className="text-muted fs-11">
+                    💻 {loteStats.cpus} CPUs • 🖥️ {loteStats.monitores} Monitores {loteStats.notebooks > 0 ? `• 💼 ${loteStats.notebooks} Notes` : ''}
+                  </span>
                 </div>
 
+                {loteItens.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-soft-danger btn-sm px-2 py-1 fs-11"
+                    onClick={() => {
+                      if (window.confirm('Deseja limpar todos os itens deste lote não salvo?')) setLoteItens([]);
+                    }}
+                  >
+                    <i className="ri-delete-bin-line me-1"></i> Limpar
+                  </button>
+                )}
+              </div>
+
+              {/* Botão de Gravar Saída (Grande e destacado) */}
+              <button
+                type="button"
+                className="btn btn-success btn-lg w-100 fw-bold shadow-sm d-flex align-items-center justify-content-center gap-2 py-2"
+                style={{ borderRadius: '10px' }}
+                onClick={handleGravarLote}
+                disabled={salvandoLote || loteItens.length === 0}
+              >
+                <i className="ri-save-3-line fs-18"></i>
+                <span>{salvandoLote ? 'Gravando...' : `Gravar e Finalizar Saída (${loteItens.length} itens)`}</span>
+              </button>
+
+              {/* Tabela Compacta de Itens Bipados */}
+              {loteItens.length > 0 && (
+                <div className="table-responsive border rounded mt-1" style={{ maxHeight: '220px', overflowY: 'auto' }}>
+                  <table className="table table-sm table-hover table-striped align-middle mb-0 fs-11">
+                    <thead className="table-light sticky-top">
+                      <tr>
+                        <th style={{ width: '30px' }}>#</th>
+                        <th style={{ width: '65px' }}>Tipo</th>
+                        <th>Patrimônio</th>
+                        <th>Hora</th>
+                        <th className="text-center" style={{ width: '40px' }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loteItens.map((it, idx) => (
+                        <tr key={it.id}>
+                          <td className="text-muted font-monospace">{loteItens.length - idx}</td>
+                          <td>
+                            <span className={`badge font-monospace ${
+                              it.tipo === 'CPU' ? 'bg-soft-primary text-primary' : it.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
+                            } border`}>
+                              {it.tipo}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="font-monospace fw-bold">{it.patrimonio}</span>
+                            {it.numero_serie && (
+                              <span className="text-muted d-block fs-10">S/N: {it.numero_serie}</span>
+                            )}
+                          </td>
+                          <td className="text-muted font-monospace">{it.hora}</td>
+                          <td className="text-center">
+                            <button
+                              type="button"
+                              className="btn btn-ghost-danger btn-sm p-0"
+                              onClick={() => handleRemoveItem(it.id)}
+                              title="Remover"
+                            >
+                              <i className="ri-close-circle-line fs-16"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* ABA 2: HISTÓRICO DE SAÍDAS / EXPEDIÇÕES */}
+      {/* ========================================================= */}
+      {activeSubTab === 'historico' && (
+        <div className="d-flex flex-column gap-2">
+          <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+            <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
+              <div className="row g-2 align-items-center">
+                <div className="col-12 col-md-5">
+                  <input
+                    type="text"
+                    className="form-control form-control-sm"
+                    placeholder="Buscar patrimônio, serial, localidade..."
+                    value={historicoSearch}
+                    onChange={(e) => setHistoricoSearch(e.target.value)}
+                  />
+                </div>
                 <div className="col-6 col-md-3">
                   <select
                     className="form-select form-select-sm"
@@ -10804,19 +10716,17 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                     <option value="NOTEBOOK">💼 Notebooks</option>
                   </select>
                 </div>
-
-                <div className="col-6 col-md-4 text-end d-flex gap-2 justify-content-end">
+                <div className="col-6 col-md-4 text-end d-flex gap-1 justify-content-end">
                   <button
                     type="button"
-                    className="btn btn-soft-primary btn-sm"
+                    className="btn btn-soft-primary btn-sm px-2"
                     onClick={() => fetchExpedidos(1)}
                   >
                     <i className="ri-search-line me-1"></i> Filtrar
                   </button>
-
                   <button
                     type="button"
-                    className="btn btn-soft-success btn-sm d-flex align-items-center gap-1 shadow-xs"
+                    className="btn btn-soft-success btn-sm px-2"
                     onClick={handleExportarHistorico}
                     disabled={expedidosList.length === 0}
                   >
@@ -10825,43 +10735,38 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 </div>
               </div>
 
-              {/* Tabela do Histórico */}
-              <div className="table-responsive border rounded" style={{ minHeight: '300px' }}>
-                <table className="table table-sm table-hover table-striped align-middle mb-0 fs-12">
+              <div className="table-responsive border rounded mt-1" style={{ minHeight: '260px' }}>
+                <table className="table table-sm table-hover table-striped align-middle mb-0 fs-11">
                   <thead className="table-light fw-bold">
                     <tr>
-                      <th style={{ width: '40px' }}>#</th>
-                      <th>Data / Hora</th>
-                      <th>Localidade</th>
-                      <th>Secretaria</th>
+                      <th style={{ width: '35px' }}>#</th>
+                      <th>Data</th>
+                      <th>Destino</th>
                       <th>Tipo</th>
                       <th>Patrimônio</th>
                       <th>Série</th>
-                      <th>Modelo</th>
-                      <th className="text-center" style={{ width: '50px' }}>Ação</th>
+                      <th className="text-center" style={{ width: '40px' }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {loadingExpedidos ? (
                       <tr>
-                        <td colSpan="9" className="text-center py-4 text-muted">
-                          <span className="spinner-border spinner-border-sm me-2" role="status"></span>
-                          Carregando histórico de expedições...
+                        <td colSpan="7" className="text-center py-4 text-muted">
+                          <span className="spinner-border spinner-border-sm me-1"></span> Carregando...
                         </td>
                       </tr>
                     ) : expedidosList.length === 0 ? (
                       <tr>
-                        <td colSpan="9" className="text-center py-5 text-muted">
-                          Nenhum equipamento novo expedido encontrado com os filtros selecionados.
+                        <td colSpan="7" className="text-center py-4 text-muted">
+                          Nenhum registro encontrado.
                         </td>
                       </tr>
                     ) : (
                       expedidosList.map((item, index) => (
                         <tr key={item.id}>
                           <td className="text-muted font-monospace">{(page - 1) * 50 + index + 1}</td>
-                          <td className="font-monospace fs-11 text-muted">{item.data_expedicao}</td>
+                          <td className="font-monospace fs-10 text-muted">{item.data_expedicao}</td>
                           <td className="fw-bold">{item.localidade}</td>
-                          <td>{item.secretaria || '-'}</td>
                           <td>
                             <span className={`badge font-monospace ${
                               item.tipo === 'CPU' ? 'bg-soft-primary text-primary' : item.tipo === 'MONITOR' ? 'bg-soft-info text-info' : 'bg-soft-warning text-dark'
@@ -10869,15 +10774,14 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                               {item.tipo}
                             </span>
                           </td>
-                          <td className="font-monospace fw-bold fs-13">{item.patrimonio}</td>
+                          <td className="font-monospace fw-bold">{item.patrimonio}</td>
                           <td className="font-monospace text-muted">{item.numero_serie || '-'}</td>
-                          <td className="text-muted">{item.marca_modelo || '-'}</td>
                           <td className="text-center">
                             <button
                               type="button"
-                              className="btn btn-ghost-danger btn-sm p-1"
+                              className="btn btn-ghost-danger btn-sm p-0"
                               onClick={() => handleExcluirExpedido(item.id, item.patrimonio)}
-                              title="Excluir este registro"
+                              title="Excluir"
                             >
                               <i className="ri-delete-bin-line fs-14"></i>
                             </button>
@@ -10889,119 +10793,113 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 </table>
               </div>
 
-              {/* Paginação */}
               {totalPages > 1 && (
-                <div className="d-flex align-items-center justify-content-between p-2">
-                  <span className="fs-12 text-muted">
-                    Página {page} de {totalPages}
-                  </span>
+                <div className="d-flex align-items-center justify-content-between p-1">
+                  <span className="fs-11 text-muted">Pág {page}/{totalPages}</span>
                   <div className="btn-group btn-group-sm">
                     <button
                       type="button"
-                      className="btn btn-outline-secondary"
+                      className="btn btn-outline-secondary btn-sm py-0"
                       disabled={page <= 1}
                       onClick={() => fetchExpedidos(page - 1)}
                     >
-                      Anterior
+                      Ant
                     </button>
                     <button
                       type="button"
-                      className="btn btn-outline-secondary"
+                      className="btn btn-outline-secondary btn-sm py-0"
                       disabled={page >= totalPages}
                       onClick={() => fetchExpedidos(page + 1)}
                     >
-                      Próxima
+                      Próx
                     </button>
                   </div>
                 </div>
               )}
             </div>
-          )}
+          </div>
+        </div>
+      )}
 
-          {/* ========================================================= */}
-          {/* ABA 3: BALANÇO NOVO X RETORNO EMC */}
-          {/* ========================================================= */}
-          {activeSubTab === 'conciliacao' && (
-            <div className="d-flex flex-column gap-3">
-              <div className="p-3 bg-body-tertiary rounded border">
-                <label className="form-label fs-13 fw-bold mb-1">
-                  Selecione a Localidade para Ver o Balanço (Novos Entregues vs. EMC Retornados ao Galpão):
-                </label>
-                <div className="row g-2 align-items-center">
-                  <div className="col-md-8 col-12">
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="Digite ou escolha a unidade para analisar..."
-                      value={concilLocalidade}
-                      onChange={(e) => setConcilLocalidade(e.target.value)}
-                      list="concil-datalist"
-                    />
-                    <datalist id="concil-datalist">
-                      {(resumo?.localidadesDisponiveis || []).map((l) => (
-                        <option key={l} value={l} />
-                      ))}
-                    </datalist>
-                  </div>
-                  <div className="col-md-4 col-12">
-                    <button
-                      type="button"
-                      className="btn btn-primary w-100 fw-bold"
-                      onClick={() => handleConsultarConciliacao()}
-                      disabled={loadingConcil || !concilLocalidade.trim()}
-                    >
-                      <i className="ri-search-eye-line me-1"></i>
-                      {loadingConcil ? 'Calculando...' : 'Consultar Balanço'}
-                    </button>
-                  </div>
-                </div>
+      {/* ========================================================= */}
+      {/* ABA 3: BALANÇO NOVO X RETORNO EMC */}
+      {/* ========================================================= */}
+      {activeSubTab === 'conciliacao' && (
+        <div className="d-flex flex-column gap-2">
+          <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+            <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
+              <label className="form-label fs-12 fw-bold mb-1">
+                Localidade para Balanço (Novos Entregues vs. Retornados EMC):
+              </label>
+              <div className="d-flex gap-2">
+                <input
+                  type="text"
+                  className="form-control form-control-sm"
+                  placeholder="Escolha a unidade..."
+                  value={concilLocalidade}
+                  onChange={(e) => setConcilLocalidade(e.target.value)}
+                  list="concil-datalist"
+                />
+                <datalist id="concil-datalist">
+                  {(resumo?.localidadesDisponiveis || []).map((l) => (
+                    <option key={l} value={l} />
+                  ))}
+                </datalist>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm fw-bold px-3 text-nowrap"
+                  onClick={() => handleConsultarConciliacao()}
+                  disabled={loadingConcil || !concilLocalidade.trim()}
+                >
+                  {loadingConcil ? '...' : 'Consultar'}
+                </button>
               </div>
 
               {concilData && (
-                <div className="card border shadow-xs mb-0">
+                <div className="card border shadow-xs mb-0 mt-2">
                   <div className="card-header bg-soft-primary border-bottom py-2 px-3">
-                    <h6 className="card-title mb-0 fs-14 fw-bold text-primary">
+                    <h6 className="card-title mb-0 fs-13 fw-bold text-primary">
                       <i className="ri-building-line me-1"></i> {concilData.localidade}
                     </h6>
                   </div>
-                  <div className="card-body p-3">
-                    <div className="row g-3 text-center mb-3">
-                      <div className="col-md-4 col-12">
-                        <div className="p-3 rounded bg-soft-success border border-success-subtle">
-                          <span className="text-success fs-11 text-uppercase fw-bold d-block">Novos Entregues</span>
-                          <h4 className="mb-0 fs-22 font-monospace text-success fw-bold">
+                  <div className="card-body p-2">
+                    <div className="row g-2 text-center">
+                      <div className="col-4">
+                        <div className="p-2 rounded bg-soft-success border border-success-subtle">
+                          <span className="text-success fs-10 text-uppercase fw-bold d-block">Novos</span>
+                          <h5 className="mb-0 fs-16 font-monospace text-success fw-bold">
                             {concilData.resumo?.novosExpedidosTotal || 0}
-                          </h4>
-                          <small className="text-muted fs-11">
-                            {concilData.resumo?.novosCpus || 0} CPUs • {concilData.resumo?.novosMonitores || 0} Monitores
+                          </h5>
+                          <small className="text-muted" style={{ fontSize: '9px' }}>
+                            {concilData.resumo?.novosCpus || 0} CPU | {concilData.resumo?.novosMonitores || 0} Mon
                           </small>
                         </div>
                       </div>
 
-                      <div className="col-md-4 col-12">
-                        <div className="p-3 rounded bg-soft-warning border border-warning-subtle">
-                          <span className="text-warning fs-11 text-uppercase fw-bold d-block">EMC Retornados ao Galpão</span>
-                          <h4 className="mb-0 fs-22 font-monospace text-warning fw-bold">
+                      <div className="col-4">
+                        <div className="p-2 rounded bg-soft-warning border border-warning-subtle">
+                          <span className="text-warning fs-10 text-uppercase fw-bold d-block">EMC Galpão</span>
+                          <h5 className="mb-0 fs-16 font-monospace text-warning fw-bold">
                             {concilData.resumo?.emcRecolhidosGalpaoTotal || 0}
-                          </h4>
-                          <small className="text-muted fs-11">
-                            {concilData.resumo?.emcCpus || 0} CPUs • {concilData.resumo?.emcMonitores || 0} Monitores
+                          </h5>
+                          <small className="text-muted" style={{ fontSize: '9px' }}>
+                            {concilData.resumo?.emcCpus || 0} CPU | {concilData.resumo?.emcMonitores || 0} Mon
                           </small>
                         </div>
                       </div>
 
-                      <div className="col-md-4 col-12">
-                        <div className={`p-3 rounded border ${
+                      <div className="col-4">
+                        <div className={`p-2 rounded border ${
                           (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'bg-soft-danger border-danger-subtle' : 'bg-soft-info border-info-subtle'
                         }`}>
-                          <span className="fs-11 text-uppercase fw-bold d-block">Saldo Pendente a Retornar</span>
-                          <h4 className={`mb-0 fs-22 font-monospace fw-bold ${
+                          <span className="fs-10 text-uppercase fw-bold d-block">Saldo</span>
+                          <h5 className={`mb-0 fs-16 font-monospace fw-bold ${
                             (concilData.resumo?.saldoRetornoTotal || 0) > 0 ? 'text-danger' : 'text-info'
                           }`}>
                             {concilData.resumo?.saldoRetornoTotal || 0}
-                          </h4>
-                          <small className="text-muted fs-11">
-                            Saldo: {concilData.resumo?.saldoCpus || 0} CPUs • {concilData.resumo?.saldoMonitores || 0} Monitores
+                          </h5>
+                          <small className="text-muted" style={{ fontSize: '9px' }}>
+                            {concilData.resumo?.saldoCpus || 0} CPU | {concilData.resumo?.saldoMonitores || 0} Mon
                           </small>
                         </div>
                       </div>
@@ -11010,59 +10908,45 @@ function ExpedicaoNovosView({ notify, onNavigate }) {
                 </div>
               )}
             </div>
-          )}
+          </div>
+        </div>
+      )}
 
-          {/* ========================================================= */}
-          {/* ABA 4: IMPORTAR DADOS DO APP ANTERIOR */}
-          {/* ========================================================= */}
-          {activeSubTab === 'importar' && (
-            <div className="d-flex flex-column gap-3">
-              <div className="alert alert-info border-info-subtle fs-12 mb-0">
-                <i className="ri-information-line fs-16 align-middle me-1"></i>
-                <strong>Importação Rápida de Histórico:</strong> Cole os dados do seu aplicativo anterior (planilha Excel / CSV copiado e colado ou JSON). O sistema identifica automaticamente colunas de Patrimônio, Localidade, Tipo e Série.
-              </div>
-
-              <div className="mb-2">
-                <label className="form-label fs-12 fw-bold">
-                  Cole os dados abaixo (CSV com cabeçalho ou JSON):
-                </label>
-                <textarea
-                  className="form-control font-monospace fs-11"
-                  rows="8"
-                  placeholder={"patrimonio;localidade;tipo;numero_serie;marca_modelo\n100039491;CRAS Industrial;CPU;PE0FPFRT;Lenovo M75q\n100039492;CRAS Industrial;MONITOR;GB6WTN3;Dell P2422H"}
-                  value={importJsonText}
-                  onChange={(e) => setImportJsonText(e.target.value)}
-                ></textarea>
-              </div>
-
-              <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
-                <span className="text-muted fs-11">
-                  Formatos aceitos: delimitados por ponto-e-vírgula (;), vírgula (,), tabulação ou JSON.
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-success px-4 fw-bold"
-                  onClick={handleExecutarImportacao}
-                  disabled={importando || !importJsonText.trim()}
-                >
-                  <i className="ri-upload-2-line me-1"></i>
-                  {importando ? 'Processando...' : 'Importar Dados Agora'}
-                </button>
-              </div>
+      {/* ========================================================= */}
+      {/* ABA 4: IMPORTAR DADOS DO APP ANTERIOR */}
+      {/* ========================================================= */}
+      {activeSubTab === 'importar' && (
+        <div className="d-flex flex-column gap-2">
+          <div className="card shadow-sm border mb-0" style={{ borderRadius: '12px' }}>
+            <div className="card-body p-2 p-sm-3 d-flex flex-column gap-2">
+              <span className="fs-12 text-muted">
+                Cole a planilha (CSV ou JSON) dos equipamentos novos já entregues:
+              </span>
+              <textarea
+                className="form-control font-monospace fs-11"
+                rows="6"
+                placeholder={"patrimonio;localidade;tipo;numero_serie;marca_modelo\n100039491;CRAS Industrial;CPU;PE0FPFRT;Lenovo M75q"}
+                value={importJsonText}
+                onChange={(e) => setImportJsonText(e.target.value)}
+              ></textarea>
+              <button
+                type="button"
+                className="btn btn-success btn-sm fw-bold w-100 py-2"
+                onClick={handleExecutarImportacao}
+                disabled={importando || !importJsonText.trim()}
+              >
+                {importando ? 'Importando...' : 'Importar Dados Agora'}
+              </button>
 
               {importResultado && (
-                <div className="alert alert-success border-success-subtle mt-2 fs-12">
-                  <i className="ri-checkbox-circle-line fs-16 align-middle me-1"></i>
-                  <strong>Resultado da Importação:</strong> {importResultado.message}
-                  <span className="d-block mt-1 text-muted">
-                    Total Inseridos: {importResultado.inseridos} • Ignorados/Duplicados: {importResultado.ignorados}
-                  </span>
+                <div className="alert alert-success border-success-subtle mt-2 fs-11 p-2">
+                  <strong>Resultado:</strong> {importResultado.message} (Inseridos: {importResultado.inseridos})
                 </div>
               )}
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* MODAL / TERMO DE ENTREGA FORMAL (PARA IMPRESSÃO E ASSINATURA) */}
       {termoModalLote && (
