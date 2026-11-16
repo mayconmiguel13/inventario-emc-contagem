@@ -9438,7 +9438,7 @@ function parseMunicipalBarcode(rawCode) {
   let clean = String(rawCode).trim().toUpperCase();
 
   // 1. Remover prefixos de leitura comuns
-  clean = clean.replace(/^(PMC|PREFEITURA|PATRIMONIO|PAT|PATR)[s-_.:]*/i, '').trim();
+  clean = clean.replace(/^(PMC|PREFEITURA|PATRIMONIO|PAT|PATR)[\s_\-.:]*/i, '').trim();
 
   // 2. Telefone da etiqueta EMC ou de suporte descartado
   const onlyDigits = clean.replace(/\D/g, '');
