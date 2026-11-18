@@ -39,7 +39,7 @@ export default function App() {
   const [resetConfirmWord, setResetConfirmWord] = useState('');
   const [isResetting, setIsResetting] = useState(false);
   const [topbarSearchInput, setTopbarSearchInput] = useState('');
-  const [contratoInitialFilter, setContratoInitialFilter] = useState({ search: '', status: '' });
+  const [contratoInitialFilter, setContratoInitialFilter] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('app_theme') || 'light');
 
   // PWA Install & Prompt Control
@@ -443,7 +443,7 @@ export default function App() {
                 type="button"
                 className={`btn btn-sm rounded-pill px-2 px-sm-3 d-flex align-items-center gap-1 ${activeTab === 'novos' ? 'btn-success text-white' : 'btn-soft-success'}`}
                 onClick={() => handleNav('novos')}
-                title="Expedição de Equipamentos Novos Municipais (BNDES/PMAT)"
+                title="Expedição de Equipamentos Novos Municipais"
               >
                 <i className="ri-inbox-unarchive-line fs-14"></i>
                 <span className="d-none d-sm-inline">Novos</span>
@@ -762,7 +762,7 @@ export default function App() {
                     {activeTab === 'dashboard' && 'Dashboard Executivo — Dupla Conferência EMC'}
                     {activeTab === 'coletor' && 'Coletor Mobile — Leitor Óptico com Câmera (PWA)'}
                     {activeTab === 'rotas' && 'Rotas & Logística de Coleta em Campo'}
-                    {activeTab === 'novos' && 'Expedição de Equipamentos Novos Municipais (PMAT / BNDES)'}
+                    {activeTab === 'novos' && 'Expedição de Equipamentos Novos Municipais'}
                     {activeTab === 'galpao' && '1ª Conferência — Entrada no Galpão (Aguardando Retirada EMC)'}
                     {activeTab === 'baixa_emc' && '2ª Conferência — Baixa Oficial EMC (Leitura de PDF / Coleta)'}
                     {activeTab === 'contrato' && 'Base Contratual Completa da EMC (4.344 Itens)'}
@@ -803,7 +803,7 @@ export default function App() {
             {activeTab === 'novos' && <ExpedicaoNovosView notify={showNotification} onNavigate={handleNav} />}
             {activeTab === 'galpao' && <GalpaoConferenciaView onUpdated={fetchStats} notify={showNotification} onNavigate={handleNav} stats={stats} />}
             {activeTab === 'baixa_emc' && <BaixaEMCView onUpdated={fetchStats} notify={showNotification} onNavigate={handleNav} />}
-            {activeTab === 'contrato' && <ContratoView initialFilter={contratoInitialFilter} onClearInitialFilter={() => setContratoInitialFilter({ search: '', status: '' })} />}
+            {activeTab === 'contrato' && <ContratoView initialFilter={contratoInitialFilter} onClearInitialFilter={() => setContratoInitialFilter(null)} />}
             {activeTab === 'equipamentos' && <EquipamentosView />}
             {activeTab === 'auditoria' && <AuditoriaView onNavigate={handleNav} notify={showNotification} />}
             {activeTab === 'excedentes' && <GalpaoConferenciaView onUpdated={fetchStats} notify={showNotification} onNavigate={handleNav} stats={stats} initialStatus="excedente" />}
@@ -983,7 +983,7 @@ function DashboardView({ stats, onNavigate, onOpenReset }) {
   const taxaGeral = stats.taxaDevolucao || Math.min(100, Math.round((stats.totalDevolvidosEMC / (stats.totalContratadoEMC || 1)) * 100));
 
   return (
-    <div className="d-flex flex-column gap-3">
+    <div className="d-flex flex-column gap-3 pb-5 mb-5">
       {/* 1. HERO OPERATIONAL BANNER */}
       <div className="card shadow-sm border-0 mb-1" style={{ background: 'linear-gradient(135deg, #1f273e 0%, #29385c 100%)', color: '#fff' }}>
         <div className="card-body p-4">
@@ -1739,7 +1739,7 @@ function parseEmcBarcode(rawCode) {
   let clean = String(rawCode).trim().toUpperCase();
 
   // 1. Remover prefixos de leitura comuns: EMC, PATRIMONIO, PAT
-  clean = clean.replace(/^(EMC|PATRIMONIO|PAT)[\s\-_.:]*/i, '').trim();
+  clean = clean.replace(/^(EMC|PATRIMONIO|PAT)[\s_.:-]*/i, '').trim();
 
   // 2. Telefone impresso no cabeçalho da etiqueta branca EMC: (31) 21212121
   const onlyDigits = clean.replace(/\D/g, '');
@@ -4488,17 +4488,23 @@ function ContratoView({ initialFilter = null, onClearInitialFilter = null }) {
 
   useEffect(() => {
     if (initialFilter) {
-      if (initialFilter.search !== undefined && initialFilter.search !== '') {
-        setSearch(initialFilter.search);
-        setSearchInput(initialFilter.search);
+      const hasSearch = initialFilter.search !== undefined && initialFilter.search !== '';
+      const hasStatus = initialFilter.status !== undefined && initialFilter.status !== '';
+      const hasTipo = initialFilter.tipo !== undefined && initialFilter.tipo !== '';
+
+      if (hasSearch || hasStatus || hasTipo) {
+        if (hasSearch) {
+          setSearch(initialFilter.search);
+          setSearchInput(initialFilter.search);
+        }
+        if (hasStatus) {
+          setStatus(initialFilter.status);
+        }
+        if (hasTipo) {
+          setTipo(initialFilter.tipo);
+        }
+        setPage(1);
       }
-      if (initialFilter.status !== undefined && initialFilter.status !== '') {
-        setStatus(initialFilter.status);
-      }
-      if (initialFilter.tipo !== undefined && initialFilter.tipo !== '') {
-        setTipo(initialFilter.tipo);
-      }
-      setPage(1);
       if (onClearInitialFilter) onClearInitialFilter();
     }
   }, [initialFilter]);
@@ -4590,7 +4596,7 @@ function ContratoView({ initialFilter = null, onClearInitialFilter = null }) {
   const endItem = Math.min(page * limit, total);
 
   return (
-    <div className="d-flex flex-column gap-3">
+    <div className="d-flex flex-column gap-3 pb-5 mb-5">
       {/* 1. TOP EXECUTIVE KPI SUMMARY CARDS */}
       <div className="row g-3">
         <div className="col-xl-3 col-md-6">
@@ -4864,6 +4870,47 @@ function ContratoView({ initialFilter = null, onClearInitialFilter = null }) {
               )}
             </div>
           </div>
+
+          {/* Barra de Paginação Rápida no Topo */}
+          {totalPages > 1 && (
+            <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-2 pt-2 border-top bg-light p-2 rounded">
+              <span className="text-muted fs-11 font-monospace">
+                Página <strong>{page}</strong> de <strong>{totalPages}</strong> ({total.toLocaleString('pt-BR')} itens)
+              </span>
+              <div className="d-flex align-items-center gap-1">
+                <button
+                  type="button"
+                  className="btn btn-soft-secondary btn-sm py-1 px-2 fs-12 fw-bold"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  title="Página anterior"
+                >
+                  <i className="ri-arrow-left-s-line"></i> Ant.
+                </button>
+                <select
+                  className="form-select form-select-sm py-0 px-2 font-monospace fs-11"
+                  style={{ width: '90px', height: '28px' }}
+                  value={page}
+                  onChange={(e) => setPage(Number(e.target.value))}
+                >
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((pNum) => (
+                    <option key={pNum} value={pNum}>
+                      Pág. {pNum}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-soft-secondary btn-sm py-1 px-2 fs-12 fw-bold"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  title="Próxima página"
+                >
+                  Próx. <i className="ri-arrow-right-s-line"></i>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Card Body - Polished Striped & Hover Table */}
@@ -5063,7 +5110,7 @@ function ContratoView({ initialFilter = null, onClearInitialFilter = null }) {
               {totalPages > 1 && ` (Página ${page} de ${totalPages})`}
             </span>
 
-            <div className="d-flex align-items-center gap-1">
+            <div className="d-flex align-items-center gap-1 flex-wrap">
               <button
                 type="button"
                 className="btn btn-soft-secondary btn-sm"
@@ -5082,10 +5129,20 @@ function ContratoView({ initialFilter = null, onClearInitialFilter = null }) {
                 <i className="ri-arrow-left-s-line me-1"></i> Anterior
               </button>
 
-              <div className="px-2">
-                <span className="badge bg-white text-dark border font-monospace fs-12">
-                  {page} / {totalPages}
-                </span>
+              <div className="px-1">
+                <select
+                  className="form-select form-select-sm py-0 px-2 font-monospace fs-12 fw-semibold"
+                  style={{ width: '95px', height: '30px' }}
+                  value={page}
+                  onChange={(e) => setPage(Number(e.target.value))}
+                  title="Pular para página específica"
+                >
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((pNum) => (
+                    <option key={pNum} value={pNum}>
+                      Pág. {pNum}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <button
@@ -9435,7 +9492,7 @@ function RotasColetaView({ onNavigate, notify }) {
 }
 
 // ==========================================
-// MÓDULO: EXPEDIÇÃO DE EQUIPAMENTOS NOVOS MUNICIPAIS (BNDES / PMAT)
+// MÓDULO: EXPEDIÇÃO DE EQUIPAMENTOS NOVOS MUNICIPAIS
 // ==========================================
 function parseMunicipalBarcode(rawCode) {
   if (!rawCode) return { valid: false, reason: 'empty', message: 'Código vazio.' };
@@ -9443,7 +9500,7 @@ function parseMunicipalBarcode(rawCode) {
   let clean = String(rawCode).trim().toUpperCase();
 
   // 1. Remover prefixos de leitura comuns
-  clean = clean.replace(/^(PMC|PREFEITURA|PATRIMONIO|PAT|PATR)[\s_\-.:]*/i, '').trim();
+  clean = clean.replace(/^(PMC|PREFEITURA|PATRIMONIO|PAT|PATR)[\s_.:-]*/i, '').trim();
 
   // 2. Telefone da etiqueta EMC ou suporte descartado
   const onlyDigits = clean.replace(/\D/g, '');

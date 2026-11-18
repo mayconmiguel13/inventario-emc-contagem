@@ -23,15 +23,23 @@
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
           .then(function(reg) {
             console.log('[PWA] Service Worker registrado com sucesso:', reg.scope);
+            reg.update();
           })
           .catch(function(err) {
             console.warn('[PWA] Erro ao registrar Service Worker:', err);
           });
       });
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function() {
+        if (!refreshing) {
+          refreshing = true;
+          window.location.reload();
+        }
+      });
     }
   </script>
-  <script type="module" crossorigin src="/assets/index.coletor-CHtyN3vN.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-B70wEHOF.css">
+  <script type="module" crossorigin src="/assets/index.coletor-vXAshAf2.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-LmEML-9_.css">
 </head>
 <body>
   <div id="root">

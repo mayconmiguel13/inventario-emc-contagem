@@ -1,5 +1,5 @@
-// Service Worker - Coletor Inventário PWA v3.2
-const CACHE_NAME = 'coletor-inventario-v3.5';
+// Service Worker - Coletor Inventário PWA v3.7
+const CACHE_NAME = 'coletor-inventario-v3.7';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
