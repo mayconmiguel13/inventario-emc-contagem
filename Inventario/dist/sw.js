@@ -1,5 +1,5 @@
-// Service Worker - Coletor Inventário PWA v3.7
-const CACHE_NAME = 'coletor-inventario-v3.7';
+// Service Worker - Coletor Inventário PWA v3.9
+const CACHE_NAME = 'coletor-inventario-v3.9';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -29,6 +29,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME) {
+            console.log('[SW v3.9] Deletando cache obsoleto:', key);
             return caches.delete(key);
           }
         })
@@ -45,7 +46,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first com fallback de cache para assets estáticos
+  // Network-first com prioridade absoluta para navegação e HTML
+  if (url.pathname === '/' || url.pathname === '/index.html' || event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match('/index.html');
+        })
+    );
+    return;
+  }
+
+  // Para outros assets estáticos (CSS, JS com hash, imagens, fontes)
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {
@@ -56,12 +75,7 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       })
       .catch(() => {
-        return caches.match(event.request).then((cached) => {
-          if (cached) return cached;
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
-        });
+        return caches.match(event.request);
       })
   );
 });

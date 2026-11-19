@@ -475,7 +475,7 @@ export default function App() {
 
               <button
                 type="button"
-                className="btn btn-soft-danger btn-sm rounded-pill px-2 px-sm-3"
+                className="btn btn-soft-danger btn-sm rounded-pill px-2 px-sm-3 d-none d-sm-inline-flex align-items-center"
                 onClick={() => setShowResetModal(true)}
                 title="Zerar dados de galpão para reiniciar conferências"
               >
@@ -4099,7 +4099,7 @@ function BaixaEMCView({ onUpdated, notify, onNavigate }) {
         if (json.detectedData) {
           setDataBaixa(json.detectedData);
         }
-        notify('success', `Documento analisado: ${json.totalItensDocumento} equipamentos identificados!`);
+        notify('info', `Documento analisado com sucesso: ${json.totalItensDocumento} equipamentos identificados! Clique em 'Gravar Baixa no Banco' para efetivar.`);
       } else {
         notify('error', json.message || 'Falha ao analisar documento da EMC.');
       }
@@ -4281,13 +4281,30 @@ function BaixaEMCView({ onUpdated, notify, onNavigate }) {
             <h5 className="card-title text-success mb-0">
               <i className="ri-checkbox-multiple-line me-2"></i> Auditoria Cruzada da Dupla Conferência
             </h5>
-            <div className="d-flex align-items-center gap-2">
+            <div className="d-flex align-items-center gap-2 flex-wrap">
               <button
                 type="button"
                 className="btn btn-sm btn-outline-success"
                 onClick={handleExportBaixaCsv}
               >
-                <i className="ri-file-excel-2-line me-1"></i> Exportar Auditoria (CSV)
+                <i className="ri-file-excel-2-line me-1"></i> Exportar CSV
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-success fw-bold shadow-sm"
+                disabled={isConfirming}
+                onClick={handleConfirmarBaixa}
+              >
+                {isConfirming ? (
+                  <>
+                    <span className="spinner-border spinner-border-sm me-1" role="status"></span>
+                    Gravando...
+                  </>
+                ) : (
+                  <>
+                    <i className="ri-save-3-fill me-1"></i> Gravar Baixa no Banco ({auditResult.totalItensDocumento} itens)
+                  </>
+                )}
               </button>
               <span className="badge badge-success px-3 py-2 fs-13">
                 {auditResult.totalItensDocumento} Itens Identificados
@@ -4296,6 +4313,35 @@ function BaixaEMCView({ onUpdated, notify, onNavigate }) {
           </div>
 
           <div className="card-body">
+            {/* ALERTA VISÍVEL: ETAPA DE PRÉ-VISUALIZAÇÃO COM BOTÃO IMEDIATO */}
+            <div className="alert alert-warning border-warning d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3 shadow-sm py-2 px-3">
+              <div className="d-flex align-items-center gap-2">
+                <i className="ri-alert-fill fs-24 text-warning"></i>
+                <div>
+                  <strong className="fs-13 d-block text-dark">Atenção: Etapa de Pré-visualização da Leitura!</strong>
+                  <span className="fs-12 text-muted">
+                    O PDF foi analisado, mas os registros <strong>AINDA NÃO FORAM SALVOS NO BANCO</strong>. Clique no botão verde ao lado para gravar e persistir a baixa na nuvem.
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-success fw-bold px-3 py-2 shadow-sm"
+                disabled={isConfirming}
+                onClick={handleConfirmarBaixa}
+              >
+                {isConfirming ? (
+                  <>
+                    <span className="spinner-border spinner-border-sm me-1" role="status"></span>
+                    Gravando no Banco...
+                  </>
+                ) : (
+                  <>
+                    <i className="ri-save-3-fill me-1"></i> Confirmar e Gravar no Banco Agora
+                  </>
+                )}
+              </button>
+            </div>
             {/* 3 INDICADORES DA AUDITORIA */}
             <div className="row g-3 text-center mb-4">
               <div className="col-md-4">

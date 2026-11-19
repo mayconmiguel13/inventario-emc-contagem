@@ -228,24 +228,7 @@ async function syncFromTurso() {
   try {
     console.log('[Turso] Sincronizando dados da nuvem Turso para o banco SQLite local...');
     
-    // 1. Sincronizar conferencias_galpao
-    const resGalpao = await executeTurso('SELECT * FROM conferencias_galpao');
-    if (resGalpao && resGalpao.results && resGalpao.results[0]?.response?.result) {
-      const rows = tursoResultToObjects(resGalpao.results[0].response.result);
-      if (rows.length > 0) {
-        const cols = Object.keys(rows[0]);
-        const colList = cols.map(c => `"${c}"`).join(', ');
-        const placeholders = cols.map(c => `@${c}`).join(', ');
-        const upsert = db.prepare(`INSERT OR REPLACE INTO conferencias_galpao (${colList}) VALUES (${placeholders})`);
-        const runTx = db.transaction((items) => {
-          for (const it of items) upsert.run(it);
-        });
-        runTx(rows);
-        console.log(`[Turso] Sincronizados ${rows.length} itens em conferencias_galpao.`);
-      }
-    }
-
-    // 2. Sincronizar lotes_romaneio_emc
+    // 1. Sincronizar lotes_romaneio_emc PRIMEIRO (evita violação de FOREIGN KEY em conferencias_galpao)
     const resLotes = await executeTurso('SELECT * FROM lotes_romaneio_emc');
     if (resLotes && resLotes.results && resLotes.results[0]?.response?.result) {
       const lotes = tursoResultToObjects(resLotes.results[0].response.result);
@@ -259,6 +242,23 @@ async function syncFromTurso() {
         });
         runLotesTx(lotes);
         console.log(`[Turso] Sincronizados ${lotes.length} lotes de romaneio.`);
+      }
+    }
+
+    // 2. Sincronizar conferencias_galpao
+    const resGalpao = await executeTurso('SELECT * FROM conferencias_galpao');
+    if (resGalpao && resGalpao.results && resGalpao.results[0]?.response?.result) {
+      const rows = tursoResultToObjects(resGalpao.results[0].response.result);
+      if (rows.length > 0) {
+        const cols = Object.keys(rows[0]);
+        const colList = cols.map(c => `"${c}"`).join(', ');
+        const placeholders = cols.map(c => `@${c}`).join(', ');
+        const upsert = db.prepare(`INSERT OR REPLACE INTO conferencias_galpao (${colList}) VALUES (${placeholders})`);
+        const runTx = db.transaction((items) => {
+          for (const it of items) upsert.run(it);
+        });
+        runTx(rows);
+        console.log(`[Turso] Sincronizados ${rows.length} itens em conferencias_galpao.`);
       }
     }
 
@@ -1880,7 +1880,7 @@ app.post('/api/emc/parse-pdf', async (req, res) => {
 });
 
 // Confirm final write-off (Baixa Definitiva)
-app.post('/api/emc/confirmar-baixa', (req, res) => {
+app.post('/api/emc/confirmar-baixa', async (req, res) => {
   try {
     const { itens, comprovante, dataBaixa, responsavel, observacao } = req.body;
     if (!itens || !Array.isArray(itens) || itens.length === 0) {
@@ -1891,9 +1891,13 @@ app.post('/api/emc/confirmar-baixa', (req, res) => {
     const dataOperacao = dataBaixa || new Date().toLocaleDateString('pt-BR');
     const resp = responsavel || 'Gestor de Contratos';
 
-    // Create return lot
-    const lotCount = db.prepare("SELECT count(*) as c FROM lotes_romaneio_emc").get().c;
-    const numRomaneio = `DEV-EMC-${new Date().getFullYear()}-${String(lotCount + 1).padStart(3, '0')}`;
+    // Gerar número de romaneio/baixa único e blindado contra colisões
+    let seq = (db.prepare("SELECT count(*) as c FROM lotes_romaneio_emc").get().c || 0) + 1;
+    let numRomaneio = `DEV-EMC-${new Date().getFullYear()}-${String(seq).padStart(3, '0')}`;
+    while (db.prepare("SELECT id FROM lotes_romaneio_emc WHERE numero_romaneio = ?").get(numRomaneio)) {
+      seq++;
+      numRomaneio = `DEV-EMC-${new Date().getFullYear()}-${String(seq).padStart(3, '0')}`;
+    }
 
     let cpus = 0, monitores = 0, notes = 0;
     for (const it of itens) {
@@ -1928,7 +1932,10 @@ app.post('/api/emc/confirmar-baixa', (req, res) => {
         comprovante_baixa_emc = ?,
         tipo_baixa_emc = ?,
         lote_romaneio_id = ?,
-        observacao = observacao || ' | Devolvido à EMC conforme doc ' || ?
+        observacao = CASE 
+          WHEN observacao IS NULL OR observacao = '' THEN 'Devolvido à EMC conforme doc ' || ?
+          ELSE observacao || ' | Devolvido à EMC conforme doc ' || ?
+        END
       WHERE id = ?
     `);
 
@@ -1956,25 +1963,48 @@ app.post('/api/emc/confirmar-baixa', (req, res) => {
     const updateFormStmt = db.prepare("UPDATE inventario_rows SET status_logistica = 'devolvido_emc' WHERE id = ?");
     const { formByCode } = getLookupMaps();
 
+    const affectedGalpaoIds = [];
+
     const runTx = db.transaction(() => {
       for (const it of itens) {
+        const rawCode = String(it.itemCodigo || it.codigo || '').trim().toUpperCase();
+        const normCode = normalizeCode(rawCode);
+        const nSerie = String(it.nSerie || it.tag || '').trim().toUpperCase();
+
+        // Localizar registro existente no galpão para atualizar ao invés de duplicar
+        let existingGalpao = null;
         if (it.galpaoId) {
-          updateWarehouseStmt.run(docNumero, 'dupla_conferencia', loteId, docNumero, it.galpaoId);
+          existingGalpao = db.prepare("SELECT id FROM conferencias_galpao WHERE id = ?").get(it.galpaoId);
+        }
+        if (!existingGalpao && (normCode || rawCode || nSerie)) {
+          existingGalpao = db.prepare(`
+            SELECT id FROM conferencias_galpao 
+            WHERE (codigo_normalizado = ? AND ? != '')
+               OR (codigo_bipado = ? AND ? != '')
+               OR (codigo_bipado = ? AND ? != '')
+            ORDER BY id DESC LIMIT 1
+          `).get(normCode, normCode, rawCode, rawCode, nSerie, nSerie);
+        }
+
+        if (existingGalpao) {
+          updateWarehouseStmt.run(docNumero, 'dupla_conferencia', loteId, docNumero, docNumero, existingGalpao.id);
+          affectedGalpaoIds.push(existingGalpao.id);
         } else {
-          insertDirectStmt.run(
-            it.itemCodigo,
-            normalizeCode(it.itemCodigo),
+          const insertInfo = insertDirectStmt.run(
+            rawCode,
+            normCode,
             it.tipo || 'EQUIPAMENTO',
-            it.secretariaOrigem,
-            it.servidorOrigem,
+            it.secretariaOrigem || 'Galpão Central',
+            it.servidorOrigem || 'Não Declarado',
             docNumero,
             loteId,
             `Devolvido à EMC diretamente (doc ${docNumero})`
           );
+          affectedGalpaoIds.push(insertInfo.lastInsertRowid);
         }
 
-        // Update form status if applicable
-        const formMatch = formByCode.get(normalizeCode(it.itemCodigo)) || formByCode.get(normalizeCode(it.nSerie));
+        // Atualizar formulário se houver vínculo
+        const formMatch = (normCode ? formByCode.get(normCode) : null) || (nSerie ? formByCode.get(normalizeCode(nSerie)) : null);
         if (formMatch) {
           updateFormStmt.run(formMatch.id);
         }
@@ -1982,8 +2012,12 @@ app.post('/api/emc/confirmar-baixa', (req, res) => {
     });
 
     runTx();
-    syncRecordToTurso('lotes_romaneio_emc', loteId);
-    syncCodesToTurso('conferencias_galpao', itens.map(it => it.itemCodigo || it.codigo || it.nSerie));
+
+    // Sincronização atômica e aguardada com Turso Cloud permanente
+    await syncRecordToTurso('lotes_romaneio_emc', loteId);
+    if (affectedGalpaoIds.length > 0) {
+      await syncBatchToTurso('conferencias_galpao', affectedGalpaoIds);
+    }
     invalidateCache();
 
     res.json({
@@ -3355,7 +3389,7 @@ app.post('/api/novos/importar', async (req, res) => {
           pat,
           String(it.numero_serie || it.serial || '').trim(),
           String(it.marca_modelo || it.modelo || 'Lenovo ThinkCentre M75q').trim(),
-          String(it.origem_recurso || 'PMAT / BNDES').trim(),
+          String(it.origem_recurso || 'Patrimônio Municipal').trim(),
           dataExp,
           usuario,
           String(it.observacoes || '').trim()
@@ -3676,10 +3710,44 @@ app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
   res.status(404).send('{}');
 });
 
-app.use(express.static(clientDistPath));
+// Fallback de segurança para navegadores que tenham cacheado o bundle com regex antigo
+app.get('/assets/index.coletor-aPyUCXYp.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  try {
+    const assetsDir = path.resolve(clientDistPath, 'assets');
+    const files = fs.readdirSync(assetsDir);
+    const activeBundle = files.find(f => f.startsWith('index.coletor-') && f.endsWith('.js') && !f.includes('aPyUCXYp'));
+    if (activeBundle) {
+      return res.sendFile(path.resolve(assetsDir, activeBundle));
+    }
+  } catch (e) {}
+  res.sendFile(path.resolve(clientDistPath, 'index.html'));
+});
+
+// Rota para a raiz e index.html com desativação absoluta de cache HTTP
+app.get(['/', '/index.html'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(path.resolve(clientDistPath, 'index.html'));
+});
+
+app.use(express.static(clientDistPath, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.resolve(clientDistPath, 'index.html'));
 });
 
